@@ -1,5 +1,5 @@
 import os
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 from typing import List, Tuple
 import pandas as pd
 import numpy as np
@@ -10,12 +10,51 @@ GITHUB_API_BASE_URL = "https://api.github.com"
 DEFAULT_MONTHS_LOOKBACK = int(os.getenv("DEFAULT_MONTHS_LOOKBACK", 0))
 API_TOKEN = os.getenv("GITHUB_API_TOKEN")
 
-def get_prs_for_contributor(repo_owner: str, repo_name: str, contributor: str, months_lookback: int):
+import requests
+import datetime
+
+def get_commenters_stats(repo_owner, repo_name, months_lookback):
+    # calculate start and end dates
+    today = datetime.datetime.now().date()
+    start_date = today - datetime.timedelta(days=months_lookback*30)
+    end_date = today + datetime.timedelta(days=1)
+
+    # get all pull requests for the repo within the lookback period
+    url = f"https://api.github.com/repos/{repo_owner}/{repo_name}/pulls?state=closed&since={start_date}&until={end_date}"
+    headers = {
+        "Authorization": f"Bearer {API_TOKEN}",
+        "Accept": "application/vnd.github+json",
+    }  
+    response = requests.get(url, headers=headers)
+
+    pull_requests = response.json()
+
+    # get all comments for each pull request and add up the number of comments per commenter
+    commenters = {}
+    for pr in pull_requests:
+        url = pr['comments_url']
+        response = requests.get(url, headers=headers)
+        comments = response.json()
+        for comment in comments:
+            commenter_name = comment['user']['login']
+            if commenter_name not in commenters:
+                commenters[commenter_name] = 1
+            else:
+                commenters[commenter_name] += 1
+    
+    # convert commenters dictionary to list of dictionaries and sort by number of comments
+    commenters_list = [{'commenter_name': k, 'num_comments': v} for k, v in commenters.items()]
+    commenters_list = sorted(commenters_list, key=lambda x: x['num_comments'], reverse=True)
+
+    return commenters_list
+
+
+def get_prs_for_contributor(repo_owner: str, repo_name: str, contributor: str):
     access_token = API_TOKEN
     default_lookback = int(os.getenv('DEFAULT_MONTHS_LOOKBACK', 3))
     since_date = (datetime.now() - timedelta(weeks=default_lookback*4)).strftime('%Y-%m-%dT%H:%M:%SZ')
 
-    url = f'https://api.github.com/search/issues?q=type:pr+repo:{repo_owner}/{repo_name}+author:{contributor}+created:>{since_date}&per_page=100'
+    url = f'https://api.github.com/search/issues?q=type:pr+repo:{repo_owner}/{repo_name}+author:{contributor}+created:>{since_date}&per_page=1000'
     headers = {'Authorization': f'token {access_token}'}
     response = requests.get(url, headers=headers)
     if response.status_code != 200:
@@ -37,15 +76,14 @@ def get_contributors_stats(repo_owner: str, repo_names: List[str], months_lookba
         "Accept": "application/vnd.github+json",
     }
 
-    contributors_stats = []
-    today: datetime = datetime.today()
+    today = datetime.datetime.now().date()
     start_date = pd.Timestamp.today() - pd.DateOffset(months=DEFAULT_MONTHS_LOOKBACK)
     end_date = pd.Timestamp.today()
     num_workdays = get_workdays(start_date, end_date)
     contributors = []
 
     for repo_name in repo_names:
-
+        list_dict_commenter_stats: list = get_commenters_stats(repo_owner, repo_name, months_lookback)
         # Returns the total number of commits authored by the contributor. In addition, the response includes a Weekly Hash (weeks array) with the following information:
         # w - Start of the week, given as a Unix timestamp.
         # a - Number of additions
@@ -59,17 +97,20 @@ def get_contributors_stats(repo_owner: str, repo_names: List[str], months_lookba
 
         for contributor in response.json():
             contributor_name = contributor.get("author", {}).get("login", "")
-            contributor_stats = {"repo": repo_name, "contributor_name": contributor_name, "start_date": start_date, "end_date": today, "num_workdays": num_workdays, "commits": 0, "prs": 0, "reviews": 0, "changed_lines": 0}
+            contributor_stats = {"repo": repo_name, "contributor_name": contributor_name, "start_date": start_date, "end_date": today, "num_workdays": num_workdays, "commits": 0, "prs": 0, "review_comments": 0, "changed_lines": 0}
             for weekly_stat in contributor["weeks"]:
                 weekly_date = datetime.utcfromtimestamp(weekly_stat["w"])
 
                 if weekly_date >= start_date:
                     contributor_stats["start_date"] = weekly_date
                     contributor_stats["commits"] += weekly_stat["c"]
-                    contributor_stats["reviews"] += weekly_stat.get("r", 0)
                     contributor_stats["changed_lines"] += weekly_stat.get("d", 0) + weekly_stat.get("a", 0)
 
             contributor_stats["prs"] = get_prs_for_contributor(repo_owner,repo_name, contributor_name,months_lookback)
+            for dict_commenter_stats in list_dict_commenter_stats:
+                if dict_commenter_stats["commenter_name"] == contributor_name:
+                    contributor_stats["review_comments"] += dict_commenter_stats["num_comments"]
+
             # Only save stats if there are stats to save
             if contributor_stats["commits"] == 0 and contributor_stats["prs"] == 0 and contributor_stats["reviews"] == 0 and contributor_stats["changed_lines"] == 0:
                 continue
@@ -77,6 +118,7 @@ def get_contributors_stats(repo_owner: str, repo_names: List[str], months_lookba
             contributors.append(contributor_stats)
 
     return contributors
+
 
 def save_contributors_to_csv(contributors, filename):
     df = pd.DataFrame(contributors)
