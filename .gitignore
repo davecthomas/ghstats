@@ -2,6 +2,9 @@
 *.pyc
 __pycache__/
 
+# ignore output files
+*.csv
+
 # Ignore the virtual environment
 venv/
 
