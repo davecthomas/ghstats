@@ -230,6 +230,7 @@ def get_contributors_stats(repo_owner: str, repo_names: List[str], months_lookba
 def save_contributors_to_csv(contributors, filename):
     df = pd.DataFrame(contributors)
     df.to_csv(filename, index=False)
+    return df
 
 if __name__ == "__main__":
     repo_owner = os.getenv("REPO_OWNER")
@@ -238,7 +239,8 @@ if __name__ == "__main__":
 
     contributors_stats = get_contributors_stats(repo_owner, repo_names, months_lookback)
     date_string = datetime.date.today().strftime('%Y-%m-%d')
-    save_contributors_to_csv(contributors_stats, f'{date_string}-{months_lookback}-{repo_owner}_contributor_stats.csv')
+    df = save_contributors_to_csv(contributors_stats, f'{date_string}-{months_lookback}-{repo_owner}_contributor_stats.csv')
+    summary = df.describe()
 
-    for contributor_stat in contributors_stats:
-        print(contributor_stat)
+    # write the summary statistics to a new CSV file
+    summary.to_csv(f'{date_string}-{months_lookback}-{repo_owner}_summary_stats.csv')
