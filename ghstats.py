@@ -125,7 +125,9 @@ def get_prs_for_contributor(repo_owner: str, repo_name: str, contributor: str):
     response = requests.get(url, headers=headers)
     if response.status_code != 200:
         if response.status_code == 422:  # Try again
-            time.sleep(2000)
+            print(
+                f"\tGot a 422 response on search/issues?q=type:pr+repo:{repo_owner}/{repo_name}+author:{contributor}+created:>{since_date}, so retrying after 5 sec...")
+            time.sleep(5)
             response = requests.get(url, headers=headers)
     # response.raise_for_status()
     if response.status_code == 200:
