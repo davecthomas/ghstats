@@ -11,6 +11,7 @@ import requests
 GITHUB_API_BASE_URL = "https://api.github.com"
 DEFAULT_MONTHS_LOOKBACK = int(os.getenv("DEFAULT_MONTHS_LOOKBACK", 0))
 API_TOKEN = os.getenv("GITHUB_API_TOKEN")
+MAX_ITEMS_PER_PAGE = int(os.getenv("MAX_ITEMS_PER_PAGE", 1000))
 
 
 def get_github_collaborator_name(username):
@@ -48,7 +49,7 @@ def get_commenters_stats(repo_owner, repo_name, months_lookback):
     end_date = today + timedelta(days=1)
 
     # get all pull requests for the repo within the lookback period
-    url = f"https://api.github.com/repos/{repo_owner}/{repo_name}/pulls?state=closed&since={start_date}&until={end_date}"
+    url = f"https://api.github.com/repos/{repo_owner}/{repo_name}/pulls?state=closed&since={start_date}&until={end_date}&per_page={MAX_ITEMS_PER_PAGE}"
     headers = {
         "Authorization": f"Bearer {API_TOKEN}",
         "Accept": "application/vnd.github+json",
@@ -96,7 +97,7 @@ def get_first_commit_date(repo_owner, repo_name, contributor_username):
         "Authorization": f"Bearer {API_TOKEN}"
     }
     response = requests.get(f"https://api.github.com/repos/{repo_owner}/{repo_name}/commits",
-                            params={"author": contributor_username}, headers=headers)
+                            params={"author": contributor_username, "per_page": MAX_ITEMS_PER_PAGE}, headers=headers)
     response.raise_for_status()
 
     commits = response.json()
@@ -117,7 +118,7 @@ def get_prs_for_contributor(repo_owner: str, repo_name: str, contributor: str):
     since_date = (datetime.now(
     ) - timedelta(weeks=default_lookback*4)).strftime('%Y-%m-%dT%H:%M:%SZ')
 
-    url = f'https://api.github.com/search/issues?q=type:pr+repo:{repo_owner}/{repo_name}+author:{contributor}+created:>{since_date}&per_page=1000'
+    url = f'https://api.github.com/search/issues?q=type:pr+repo:{repo_owner}/{repo_name}+author:{contributor}+created:>{since_date}&per_page={MAX_ITEMS_PER_PAGE}'
     headers = {
         "Accept": "application/vnd.github.v3+json",
         "Authorization": f"Bearer {API_TOKEN}"
@@ -152,12 +153,12 @@ def add_quintile_stats(df):
         df['prs_per_day'], 5, labels=False, duplicates='drop')
     df['commits_quintile'] = pd.qcut(
         df['commits_per_day'], 5, labels=False, duplicates='drop')
-    df['lines_of_code_quintile'] = pd.qcut(
-        df['changed_lines_per_day'], 5, labels=False, duplicates='drop',)
+    # df['lines_of_code_quintile'] = pd.qcut(
+    #     df['changed_lines_per_day'], 5, labels=False, duplicates='drop',)
     df['review_comments_quintile'] = pd.qcut(
         df['review_comments_per_day'], 5, labels=False, duplicates='drop',)
     cols_to_average = ['prs_quintile', 'commits_quintile',
-                       'review_comments_quintile', 'lines_of_code_quintile']
+                       'review_comments_quintile']
     df['avg_quintile'] = df[cols_to_average].mean(axis=1)
     return df
 
@@ -183,7 +184,7 @@ def get_contributors_stats(repo_owner: str, repo_names: List[str], months_lookba
         # a - Number of additions
         # d - Number of deletions
         # c - Number of commits
-        url = f"{GITHUB_API_BASE_URL}/repos/{repo_owner}/{repo_name}/stats/contributors"
+        url = f"{GITHUB_API_BASE_URL}/repos/{repo_owner}/{repo_name}/stats/contributors?per_page={MAX_ITEMS_PER_PAGE}"
         response = requests.get(url, headers=headers)
 
         if response.status_code != 200:
@@ -201,6 +202,11 @@ def get_contributors_stats(repo_owner: str, repo_names: List[str], months_lookba
         # Handle the response
         if response.status_code == 200:
             for contributor in response.json():
+                first_commit_date: date = None
+                contributor_name: str = None
+                contributor_username: str = None
+                contributor_stats: dict = None
+
                 contributor_username = contributor.get(
                     "author", {}).get("login", "")
                 contributor_name = get_github_collaborator_name(
@@ -281,9 +287,9 @@ if __name__ == "__main__":
         repo_owner, repo_names, months_lookback)
 
     df = save_contributors_to_csv(
-        contributors_stats, f'{date_string}-{months_lookback}-{repo_owner}_contributor_stats.csv')
+        contributors_stats, f'{date_string}-{months_lookback}-{repo_owner}_{repo_names}_contributor_stats.csv')
     summary = df.describe()
 
     # write the summary statistics to a new CSV file
     summary.to_csv(
-        f'{date_string}-{months_lookback}-{repo_owner}_summary_stats.csv')
+        f'{date_string}-{months_lookback}-{repo_owner}_{repo_names}_summary_stats.csv')
