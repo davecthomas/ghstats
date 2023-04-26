@@ -153,8 +153,8 @@ def add_quintile_stats(df):
         df['prs_per_day'], 5, labels=False, duplicates='drop')
     df['commits_quintile'] = pd.qcut(
         df['commits_per_day'], 5, labels=False, duplicates='drop')
-    # df['lines_of_code_quintile'] = pd.qcut(
-    #     df['changed_lines_per_day'], 5, labels=False, duplicates='drop',)
+    df['lines_of_code_quintile'] = pd.qcut(
+        df['changed_lines_per_day'], 5, labels=False, duplicates='drop',)
     df['review_comments_quintile'] = pd.qcut(
         df['review_comments_per_day'], 5, labels=False, duplicates='drop',)
     cols_to_average = ['prs_quintile', 'commits_quintile',
@@ -220,6 +220,12 @@ def get_contributors_stats(repo_owner: str, repo_names: List[str], months_lookba
                     num_workdays = get_workdays(first_commit_date, end_date)
                 else:
                     num_workdays = max_num_workdays
+
+                # TO DO: if the contributor username is already in the array, use the one with the earliest date
+                # and add in the other stats to the existing stats
+
+
+
 
                 contributor_stats = {"repo": repo_name, "contributor_name": contributor_name,
                                      "contributor_username":  contributor_username,
