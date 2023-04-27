@@ -12,7 +12,7 @@ GITHUB_API_BASE_URL = "https://api.github.com"
 DEFAULT_MONTHS_LOOKBACK = int(os.getenv("DEFAULT_MONTHS_LOOKBACK", 0))
 API_TOKEN = os.getenv("GITHUB_API_TOKEN")
 MAX_ITEMS_PER_PAGE = int(os.getenv("MAX_ITEMS_PER_PAGE", 1000))
-
+MIN_WORKDAYS_AS_CONTRIBUTOR = int(os.getenv("MIN_WORKDAYS_AS_CONTRIBUTOR", 30))
 
 def get_github_collaborator_name(username):
     """
@@ -41,7 +41,6 @@ def get_github_collaborator_name(username):
     else:
         return None
 
-
 def get_commenters_stats(repo_owner, repo_name, months_lookback):
     # calculate start and end dates
     today = datetime.now().date()
@@ -55,6 +54,7 @@ def get_commenters_stats(repo_owner, repo_name, months_lookback):
         "Accept": "application/vnd.github+json",
     }
     response = requests.get(url, headers=headers)
+    response.raise_for_status() 
 
     pull_requests = response.json()
 
@@ -146,6 +146,27 @@ def get_workdays(start_date, end_date):
 
     return weekdays
 
+def convert_to_letter_grade(score):
+    grades = ['F', 'D', 'C', 'B', 'A']
+    modifiers = ['-', '', '+']
+    
+    grade_idx = int(score) if score == 5 else int(score // 1)
+    modifier_idx = 0
+    
+    if grade_idx < 4:
+        if (score - grade_idx) >= 0.666:
+            modifier_idx = 2
+        elif (score - grade_idx) >= 0.333:
+            modifier_idx = 1
+    elif grade_idx == 4:
+        if (score - grade_idx) >= 0.5:
+            modifier_idx = 2
+        elif (score - grade_idx) >= 0.2:
+            modifier_idx = 1
+    
+    letter_grade = grades[grade_idx] + modifiers[modifier_idx]
+    
+    return letter_grade
 
 def add_quintile_stats(df):
     # df is the dataframe of contributor stats. Calc quintiles, add columns, return new df
@@ -160,6 +181,7 @@ def add_quintile_stats(df):
     cols_to_average = ['prs_quintile', 'commits_quintile',
                        'review_comments_quintile']
     df['avg_quintile'] = df[cols_to_average].mean(axis=1)
+    df['grade'] = df['avg_quintile'].apply(convert_to_letter_grade)
     return df
 
 
@@ -190,6 +212,7 @@ def get_contributors_stats(repo_owner: str, repo_names: List[str], months_lookba
         if response.status_code != 200:
             if response.status_code == 202:
                 retry_url = response.headers.get('Location')
+                print(f"Retrying request for {repo_owner}/{repo_name} due to {response.status_code} response")
                 if retry_url:
                     # Wait for 5 seconds before checking the status
                     time.sleep(5)
@@ -199,6 +222,9 @@ def get_contributors_stats(repo_owner: str, repo_names: List[str], months_lookba
                     # Wait for 5 seconds before retrying the request
                     time.sleep(5)
                     response = requests.get(url, headers=headers)
+            else:
+                response.raise_for_status()
+
         # Handle the response
         if response.status_code == 200:
             for contributor in response.json():
@@ -206,6 +232,8 @@ def get_contributors_stats(repo_owner: str, repo_names: List[str], months_lookba
                 contributor_name: str = None
                 contributor_username: str = None
                 contributor_stats: dict = None
+                contributor_already_added: bool = False
+                days_since_first_commit: int = 0
 
                 contributor_username = contributor.get(
                     "author", {}).get("login", "")
@@ -216,24 +244,36 @@ def get_contributors_stats(repo_owner: str, repo_names: List[str], months_lookba
                 print(f"\t{contributor_name} ({contributor_username})")
                 first_commit_date = get_first_commit_date(
                     repo_owner, repo_name, contributor_username)
+                num_workdays = max_num_workdays
+                # If their first commit is < roughly 6 weeks ago (configurable), 
+                # don't measure contributions. 
+                if first_commit_date is not None:
+                    days_since_first_commit = get_workdays(first_commit_date, datetime.now())
+                if days_since_first_commit < MIN_WORKDAYS_AS_CONTRIBUTOR: 
+                    continue
+                # Conditionally override num workdays if they started after start date
                 if first_commit_date is not None and first_commit_date > start_date:
-                    num_workdays = get_workdays(first_commit_date, end_date)
-                else:
-                    num_workdays = max_num_workdays
+                    num_workdays = get_workdays(first_commit_date, end_date)      
 
                 # TO DO: if the contributor username is already in the array, use the one with the earliest date
                 # and add in the other stats to the existing stats
+                for contributor_stats_dict in contributors:
+                    if contributor_stats_dict["contributor_name"] == contributor_name:
+                        contributor_stats = contributor_stats_dict
+                        contributor_already_added = True
+                        print(f"\t\tMerging stats for {contributor_name} ({contributor_username}) with previously found contributor {contributor_stats_dict['contributor_name']} ({contributor_stats_dict['contributor_username']})")
+                        break
 
-
-
-
-                contributor_stats = {"repo": repo_name, "contributor_name": contributor_name,
+                # if this is the first time we've seen this contributor, init a dict
+                if contributor_stats is None:
+                    contributor_stats = {"repo": repo_name, "contributor_name": contributor_name,
                                      "contributor_username":  contributor_username,
                                      "stats_beginning": start_date,
                                      "stats_ending": today,
                                      "contributor_first_commit_date": first_commit_date,
                                      "num_workdays": num_workdays, "commits": 0, "prs": 0,
                                      "review_comments": 0, "changed_lines": 0}
+                
                 for weekly_stat in contributor["weeks"]:
                     weekly_date = datetime.utcfromtimestamp(
                         weekly_stat["w"])
@@ -271,7 +311,8 @@ def get_contributors_stats(repo_owner: str, repo_names: List[str], months_lookba
                         contributor_stats["review_comments_per_day"] = round(
                             contributor_stats["review_comments"]/num_workdays, 3)
 
-                contributors.append(contributor_stats)
+                if not contributor_already_added:
+                    contributors.append(contributor_stats)
 
     return contributors
 
