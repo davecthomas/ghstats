@@ -150,19 +150,15 @@ def convert_to_letter_grade(score):
     grades = ['F', 'D', 'C', 'B', 'A']
     modifiers = ['-', '', '+']
     
-    grade_idx = int(score) if score == 5 else int(score // 1)
+    grade_idx = int(score) if score == 4 else int(score // 1)
     modifier_idx = 0
     
-    if grade_idx < 4:
-        if (score - grade_idx) >= 0.666:
-            modifier_idx = 2
-        elif (score - grade_idx) >= 0.333:
-            modifier_idx = 1
-    elif grade_idx == 4:
-        if (score - grade_idx) >= 0.5:
-            modifier_idx = 2
-        elif (score - grade_idx) >= 0.2:
-            modifier_idx = 1
+    if (score - grade_idx) >= 0.666:
+        modifier_idx = 2
+    elif (score - grade_idx) >= 0.333:
+        modifier_idx = 1
+    elif score == 4:
+        modifier_idx = 1
     
     letter_grade = grades[grade_idx] + modifiers[modifier_idx]
     
@@ -319,6 +315,8 @@ def get_contributors_stats(repo_owner: str, repo_names: List[str], months_lookba
 
 def save_contributors_to_csv(contributors, filename):
     df = pd.DataFrame(contributors)
+    df["review_comments_per_day"] = df['review_comments_per_day'].fillna(0)
+    df["prs_per_day"] = df['prs_per_day'].fillna(0)
     df = add_quintile_stats(df)
     df.to_csv(filename, index=False)
     return df
