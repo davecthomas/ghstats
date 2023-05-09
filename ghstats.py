@@ -7,12 +7,14 @@ import pandas as pd
 import numpy as np
 import time
 import requests
+from scipy.stats import norm
 
 GITHUB_API_BASE_URL = "https://api.github.com"
 DEFAULT_MONTHS_LOOKBACK = int(os.getenv("DEFAULT_MONTHS_LOOKBACK", 0))
 API_TOKEN = os.getenv("GITHUB_API_TOKEN")
 MAX_ITEMS_PER_PAGE = int(os.getenv("MAX_ITEMS_PER_PAGE", 1000))
 MIN_WORKDAYS_AS_CONTRIBUTOR = int(os.getenv("MIN_WORKDAYS_AS_CONTRIBUTOR", 30))
+MAX_RETRIES = 5
 
 def get_github_collaborator_name(username):
     """
@@ -65,6 +67,8 @@ def get_commenters_stats(repo_owner, repo_name, months_lookback):
         response = requests.get(url, headers=headers)
         comments = response.json()
         for comment in comments:
+            if "user" not in comment: 
+                continue
             commenter_name = comment['user']['login']
             if commenter_name not in commenters:
                 commenters[commenter_name] = 1
@@ -164,22 +168,44 @@ def convert_to_letter_grade(score):
     
     return letter_grade
 
-def add_quintile_stats(df):
-    # df is the dataframe of contributor stats. Calc quintiles, add columns, return new df
-    df['prs_quintile'] = pd.qcut(
-        df['prs_per_day'], 5, labels=False, duplicates='drop')
-    df['commits_quintile'] = pd.qcut(
-        df['commits_per_day'], 5, labels=False, duplicates='drop')
-    df['lines_of_code_quintile'] = pd.qcut(
-        df['changed_lines_per_day'], 5, labels=False, duplicates='drop',)
-    df['review_comments_quintile'] = pd.qcut(
-        df['review_comments_per_day'], 5, labels=False, duplicates='drop',)
-    cols_to_average = ['prs_quintile', 'commits_quintile',
-                       'review_comments_quintile']
-    df['avg_quintile'] = df[cols_to_average].mean(axis=1)
-    df['grade'] = df['avg_quintile'].apply(convert_to_letter_grade)
+def add_ntile_stats(df):
+    ntile = 10 # Decile
+    # df is the dataframe of contributor stats. Calc ntiles, add columns, return new df
+    df['prs_ntile'] = pd.qcut(
+        df['prs_per_day'], ntile, labels=False, duplicates='drop')
+    df['commits_ntile'] = pd.qcut(
+        df['commits_per_day'], ntile, labels=False, duplicates='drop')
+    df['lines_of_code_ntile'] = pd.qcut(
+        df['changed_lines_per_day'], ntile, labels=False, duplicates='drop',)
+    df['review_comments_ntile'] = pd.qcut(
+        df['review_comments_per_day'], ntile, labels=False, duplicates='drop',)
+    cols_to_average = ['prs_ntile', 'commits_ntile',
+                       'review_comments_ntile']
+    df['avg_ntile'] = df[cols_to_average].mean(axis=1)
+    # df['grade'] = df['avg_ntile'].apply(convert_to_letter_grade)
     return df
 
+def curve_column(df, col_name, new_col_name):
+    # Get the values in the specified column
+    col_values = df[col_name].values
+    
+    # Calculate the mean and standard deviation of the values
+    mean = np.mean(col_values)
+    std_dev = np.std(col_values)
+    
+    # Calculate the normal distribution curve for each value
+    curve_values = norm.pdf(col_values, mean, std_dev)
+    
+    # Rescale the curve so that it spans the same range as the original column
+    curve_values = curve_values * (np.max(col_values) - np.min(col_values))
+    
+    # Shift the curve so that its minimum value is the same as the original column
+    curve_values = curve_values + np.min(col_values)
+    
+    # Add the curve values as a new column to the dataframe
+    df[new_col_name] = curve_values
+    
+    return df
 
 def get_contributors_stats(repo_owner: str, repo_names: List[str], months_lookback: int) -> List[Tuple[str, str, str, float, float, float, float]]:
     headers = {
@@ -207,17 +233,26 @@ def get_contributors_stats(repo_owner: str, repo_names: List[str], months_lookba
 
         if response.status_code != 200:
             if response.status_code == 202:
-                retry_url = response.headers.get('Location')
-                print(f"Retrying request for {repo_owner}/{repo_name} due to {response.status_code} response")
-                if retry_url:
-                    # Wait for 5 seconds before checking the status
-                    time.sleep(5)
-                    response = requests.get(retry_url, headers=headers)
-                    # Handle the status response
-                else:
-                    # Wait for 5 seconds before retrying the request
-                    time.sleep(5)
-                    response = requests.get(url, headers=headers)
+                retry_count: int = 0
+                bad_response: bool = True
+                while bad_response and retry_count < MAX_RETRIES:
+                    retry_url = response.headers.get('Location')
+                    print(f"Retrying request for {repo_owner}/{repo_name} due to {response.status_code} response")
+                    if retry_url:
+                        # Wait for 5 seconds before checking the status
+                        time.sleep(5)
+                        response = requests.get(retry_url, headers=headers)
+                        # Handle the status response
+                    else:
+                        # Wait for 5 seconds before retrying the request
+                        time.sleep(5)
+                        response = requests.get(url, headers=headers)
+                    response.raise_for_status()
+
+                    if response == 200:
+                        bad_response = False
+                    else: 
+                        retry_count +=1
             else:
                 response.raise_for_status()
 
@@ -309,15 +344,29 @@ def get_contributors_stats(repo_owner: str, repo_names: List[str], months_lookba
 
                 if not contributor_already_added:
                     contributors.append(contributor_stats)
+        else: 
+            response.raise_for_status()
 
     return contributors
 
+# Shorten filename
+def truncate_filename(repos):
+    max_length = 230
+    if len(repos) > max_length:
+        repos = repos[:max_length]
+        # remove any illegal characters
+        # filename = ''.join(c for c in filename if c.isalnum() or c in ['_', '.', ' '])
+    return repos
 
 def save_contributors_to_csv(contributors, filename):
     df = pd.DataFrame(contributors)
+    df["commits_per_day"] = df['commits_per_day'].fillna(0)
+    df["changed_lines_per_day"] = df['changed_lines_per_day'].fillna(0)
+    df["prs_per_day"] = df['prs_per_day'].fillna(0)
     df["review_comments_per_day"] = df['review_comments_per_day'].fillna(0)
     df["prs_per_day"] = df['prs_per_day'].fillna(0)
-    df = add_quintile_stats(df)
+    df = add_ntile_stats(df)
+    df = curve_column(df, "avg_ntile", "curved_score")
     df.to_csv(filename, index=False)
     return df
 
@@ -330,11 +379,9 @@ if __name__ == "__main__":
     date_string = date.today().strftime('%Y-%m-%d')
     contributors_stats = get_contributors_stats(
         repo_owner, repo_names, months_lookback)
-
-    df = save_contributors_to_csv(
-        contributors_stats, f'{date_string}-{months_lookback}-{repo_owner}_{repo_names}_contributor_stats.csv')
+    filename = truncate_filename(f'{date_string}-{months_lookback}-{repo_owner}_{repo_names}')
+    df = save_contributors_to_csv(contributors_stats, f'contribs_{filename}.csv')
     summary = df.describe()
 
     # write the summary statistics to a new CSV file
-    summary.to_csv(
-        f'{date_string}-{months_lookback}-{repo_owner}_{repo_names}_summary_stats.csv')
+    summary.to_csv( f'summary_{filename}.csv')
