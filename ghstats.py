@@ -359,15 +359,17 @@ def truncate_filename(repos):
     return repos
 
 def save_contributors_to_csv(contributors, filename):
-    df = pd.DataFrame(contributors)
-    df["commits_per_day"] = df['commits_per_day'].fillna(0)
-    df["changed_lines_per_day"] = df['changed_lines_per_day'].fillna(0)
-    df["prs_per_day"] = df['prs_per_day'].fillna(0)
-    df["review_comments_per_day"] = df['review_comments_per_day'].fillna(0)
-    df["prs_per_day"] = df['prs_per_day'].fillna(0)
-    df = add_ntile_stats(df)
-    df = curve_column(df, "avg_ntile", "curved_score")
-    df.to_csv(filename, index=False)
+    df = None
+    if len(contributors) > 0:
+        df = pd.DataFrame(contributors)
+        df["commits_per_day"] = df['commits_per_day'].fillna(0)
+        df["changed_lines_per_day"] = df['changed_lines_per_day'].fillna(0)
+        df["prs_per_day"] = df['prs_per_day'].fillna(0)
+        df["review_comments_per_day"] = df['review_comments_per_day'].fillna(0)
+        df["prs_per_day"] = df['prs_per_day'].fillna(0)
+        df = add_ntile_stats(df)
+        df = curve_column(df, "avg_ntile", "curved_score")
+        df.to_csv(filename, index=False)
     return df
 
 
