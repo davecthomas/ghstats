@@ -370,6 +370,8 @@ def save_contributors_to_csv(contributors, filename):
         df = add_ntile_stats(df)
         df = curve_column(df, "avg_ntile", "curved_score")
         df.to_csv(filename, index=False)
+    else:
+        print(f"\t No contributors for {filename}")
     return df
 
 
