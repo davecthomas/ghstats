@@ -44,6 +44,7 @@ def get_github_collaborator_name(username):
         return None
 
 def get_commenters_stats(repo_owner, repo_name, months_lookback):
+    commenters_list = []
     # calculate start and end dates
     today = datetime.now().date()
     start_date = today - timedelta(days=months_lookback*30)
@@ -55,31 +56,44 @@ def get_commenters_stats(repo_owner, repo_name, months_lookback):
         "Authorization": f"Bearer {API_TOKEN}",
         "Accept": "application/vnd.github+json",
     }
-    response = requests.get(url, headers=headers)
-    response.raise_for_status() 
-
-    pull_requests = response.json()
+    pull_requests = []
+    try:
+        response = requests.get(url, headers=headers)
+        response.raise_for_status()  # Optional: Check for HTTP errors
+        pull_requests = response.json()
+    except requests.Timeout:
+        print(f"\tTimeout error: The request for repos/{repo_owner}/{repo_name}/pulls timed out")
+    except requests.exceptions.RequestException as e:
+        print(f"\tRequest error: {e}")         
 
     # get all comments for each pull request and add up the number of comments per commenter
     commenters = {}
     for pr in pull_requests:
         url = pr['comments_url']
-        response = requests.get(url, headers=headers)
-        comments = response.json()
-        for comment in comments:
-            if "user" not in comment: 
-                continue
-            commenter_name = comment['user']['login']
-            if commenter_name not in commenters:
-                commenters[commenter_name] = 1
-            else:
-                commenters[commenter_name] += 1
+        comments = []
+        try:
+            response = requests.get(url, headers=headers)
+            comments = response.json()
 
-    # convert commenters dictionary to list of dictionaries and sort by number of comments
-    commenters_list = [{'commenter_name': k, 'num_comments': v}
-                       for k, v in commenters.items()]
-    commenters_list = sorted(
-        commenters_list, key=lambda x: x['num_comments'], reverse=True)
+            for comment in comments:
+                if "user" not in comment: 
+                    continue
+                commenter_name = comment['user']['login']
+                if commenter_name not in commenters:
+                    commenters[commenter_name] = 1
+                else:
+                    commenters[commenter_name] += 1
+        except requests.Timeout:
+            print(f"\tTimeout error: The request for {url} timed out")
+        except requests.exceptions.RequestException as e:
+            print(f"\tRequest error: {e}")    
+
+    if len(commenters) > 0:
+        # convert commenters dictionary to list of dictionaries and sort by number of comments
+        commenters_list = [{'commenter_name': k, 'num_comments': v}
+                        for k, v in commenters.items()]
+        commenters_list = sorted(
+            commenters_list, key=lambda x: x['num_comments'], reverse=True)
 
     return commenters_list
 
@@ -185,26 +199,26 @@ def add_ntile_stats(df):
     # df['grade'] = df['avg_ntile'].apply(convert_to_letter_grade)
     return df
 
-def curve_column(df, col_name, new_col_name):
-    # Get the values in the specified column
-    col_values = df[col_name].values
-    
-    # Calculate the mean and standard deviation of the values
-    mean = np.mean(col_values)
-    std_dev = np.std(col_values)
-    
-    # Calculate the normal distribution curve for each value
-    curve_values = norm.pdf(col_values, mean, std_dev)
-    
-    # Rescale the curve so that it spans the same range as the original column
-    curve_values = curve_values * (np.max(col_values) - np.min(col_values))
-    
-    # Shift the curve so that its minimum value is the same as the original column
-    curve_values = curve_values + np.min(col_values)
-    
-    # Add the curve values as a new column to the dataframe
-    df[new_col_name] = curve_values
-    
+def curve_scores(df, scores_column_name, curved_score_column_name):
+    # Calculate the mean and standard deviation of the scores
+    mean = df[scores_column_name].mean()
+    std_dev = df[scores_column_name].std()
+
+    # Calculate the Z-scores for each score
+    z_scores = (df[scores_column_name] - mean) / std_dev
+
+    # Create a normal distribution with mean 0 and standard deviation 1
+    norm_dist = norm(0, 1)
+
+    # Calculate the cumulative distribution function (CDF) for each Z-score
+    cdf = norm_dist.cdf(z_scores)
+
+    # Map the CDF values to a 0-100 range
+    curved_scores = (cdf * 100).round().astype(int)
+
+    # Update the DataFrame with the curved scores
+    df[curved_score_column_name] = curved_scores
+
     return df
 
 def get_contributors_stats(repo_owner: str, repo_names: List[str], months_lookback: int) -> List[Tuple[str, str, str, float, float, float, float]]:
@@ -249,7 +263,7 @@ def get_contributors_stats(repo_owner: str, repo_names: List[str], months_lookba
                         response = requests.get(url, headers=headers)
                     response.raise_for_status()
 
-                    if response == 200:
+                    if response.status_code == 200:
                         bad_response = False
                     else: 
                         retry_count +=1
@@ -368,7 +382,7 @@ def save_contributors_to_csv(contributors, filename):
         df["review_comments_per_day"] = df['review_comments_per_day'].fillna(0)
         df["prs_per_day"] = df['prs_per_day'].fillna(0)
         df = add_ntile_stats(df)
-        df = curve_column(df, "avg_ntile", "curved_score")
+        df = curve_scores(df, "avg_ntile", "curved_score")
         df.to_csv(filename, index=False)
     else:
         print(f"\t No contributors for {filename}")
