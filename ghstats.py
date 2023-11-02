@@ -141,14 +141,27 @@ def get_prs_for_contributor(repo_owner: str, repo_name: str, contributor: str):
         "Accept": "application/vnd.github.v3+json",
         "Authorization": f"Bearer {API_TOKEN}"
     }
+
     response = requests.get(url, headers=headers)
     if response.status_code != 200:
         if response.status_code == 422:  # Try again
-            print(
-                f"\tGot a 422 response on search/issues?q=type:pr+repo:{repo_owner}/{repo_name}+author:{contributor}+created:>{since_date}, so retrying after 5 sec...")
-            time.sleep(5)
-            response = requests.get(url, headers=headers)
-    # response.raise_for_status()
+            retry_count: int = 0
+            bad_response: bool = True
+            while bad_response and retry_count < MAX_RETRIES:
+                print(
+                    f"\tGot a 422 response on search/issues?q=type:pr+repo:{repo_owner}/{repo_name}+author:{contributor}+created:>{since_date}, so retrying after 5 sec...")
+                time.sleep(5)
+                retry_url = response.headers.get('Location')                
+                if retry_url:
+                    response = requests.get(retry_url, headers=headers)
+                    # Handle the status response
+                else:
+                    response = requests.get(url, headers=headers)                
+                if response.status_code == 200:
+                    bad_response = False
+                else: 
+                    retry_count +=1
+
     if response.status_code == 200:
         return response.json()['total_count']
 
