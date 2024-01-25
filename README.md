@@ -32,3 +32,11 @@ DEFAULT_MONTHS_LOOKBACK=3
 ### If the contributor is new to the repo, what's the minimum time before you want to include them in results?
 
 MIN_WORKDAYS_AS_CONTRIBUTOR=30
+
+### Topic - if your Github org uses topics to group repos by team
+
+TOPIC=your-topic-name
+
+### Users to exclude from measuring. Often there are bots that comment on PRs. Don't measure stats on these.
+
+USER_EXCLUDE=username

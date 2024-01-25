@@ -1,20 +1,64 @@
+from __future__ import annotations
+
 import json
-from datetime import datetime
+from datetime import datetime, timezone
 from datetime import timedelta, date
 import os
+import sys
 from typing import List, Tuple
 import pandas as pd
 import numpy as np
 import time
 import requests
 from scipy.stats import norm
+import itertools
+from dateutil.relativedelta import relativedelta
+
 
 GITHUB_API_BASE_URL = "https://api.github.com"
 DEFAULT_MONTHS_LOOKBACK = int(os.getenv("DEFAULT_MONTHS_LOOKBACK", 0))
 API_TOKEN = os.getenv("GITHUB_API_TOKEN")
 MAX_ITEMS_PER_PAGE = int(os.getenv("MAX_ITEMS_PER_PAGE", 1000))
 MIN_WORKDAYS_AS_CONTRIBUTOR = int(os.getenv("MIN_WORKDAYS_AS_CONTRIBUTOR", 30))
-MAX_RETRIES = 5
+# WIP: changing HTTP 202 response retry logic
+exponential_backoff_retry_delays: list[int] = [1, 2, 4, 8, 16]
+
+
+def get_date_months_ago(months_ago) -> datetime:
+    current_date = datetime.now()
+    date_months_ago = current_date - relativedelta(months=months_ago)
+    return date_months_ago
+
+# TO DO - test this new exponential backoff and use this function instead of the inline code below
+
+
+def github_request_exponential_backoff(url):
+    exponential_backoff_retry_delays_list: list[int] = [1, 2, 4, 8, 16]
+    headers = {
+        "Accept": "application/vnd.github.v3+json",
+        "Authorization": f"Bearer {API_TOKEN}"
+    }
+
+    response = requests.get(url, headers=headers)
+    if response.status_code != 200:
+        if response.status_code == 422:  # Try again
+            for retry_attempt_delay in exponential_backoff_retry_delays_list:
+                retry_url = response.headers.get('Location')
+                # Wait for n seconds before checking the status
+                time.sleep(retry_attempt_delay)
+                retry_response_url: str = retry_url if retry_url else url
+                print(
+                    f"Retrying request for {retry_response_url} after {retry_attempt_delay} sec due to {response.status_code} response")
+                response = requests.get(
+                    retry_response_url, headers=headers)
+
+                # Check if the retry response is 200
+                if response.status_code == 200:
+                    break  # Exit the loop on successful response
+
+    if response.status_code == 200:
+        return
+
 
 def get_github_collaborator_name(username):
     """
@@ -43,12 +87,21 @@ def get_github_collaborator_name(username):
     else:
         return None
 
-def get_commenters_stats(repo_owner, repo_name, months_lookback):
+# TO DO there's a bug here. Commenters who haven't committed in months are getting credit?
+# Long gone employees
+
+
+def get_commenters_stats(repo_owner, repo_name, since_date: datetime):
+    # Exclude bot users who don't get measured
+    user_exclude_env: str = os.getenv('USER_EXCLUDE', None)
+    user_exclude_list = user_exclude_env.split(',') if user_exclude_env else []
+    if (len(user_exclude_list) > 0):
+        print(f'Excluding PR comments from {user_exclude_list}')
     commenters_list = []
     # calculate start and end dates
-    today = datetime.now().date()
-    start_date = today - timedelta(days=months_lookback*30)
-    end_date = today + timedelta(days=1)
+    today: datetime = datetime.now().date()
+    start_date: datetime = since_date
+    end_date: datetime = today + timedelta(days=1)
 
     # get all pull requests for the repo within the lookback period
     url = f"https://api.github.com/repos/{repo_owner}/{repo_name}/pulls?state=closed&since={start_date}&until={end_date}&per_page={MAX_ITEMS_PER_PAGE}"
@@ -62,9 +115,10 @@ def get_commenters_stats(repo_owner, repo_name, months_lookback):
         response.raise_for_status()  # Optional: Check for HTTP errors
         pull_requests = response.json()
     except requests.Timeout:
-        print(f"\tTimeout error: The request for repos/{repo_owner}/{repo_name}/pulls timed out")
+        print(
+            f"\tTimeout error: The request for {url} timed out")
     except requests.exceptions.RequestException as e:
-        print(f"\tRequest error: {e}")         
+        print(f"\tRequest error: {e} for {url}")
 
     # get all comments for each pull request and add up the number of comments per commenter
     commenters = {}
@@ -76,22 +130,27 @@ def get_commenters_stats(repo_owner, repo_name, months_lookback):
             comments = response.json()
 
             for comment in comments:
-                if "user" not in comment: 
+                if "user" not in comment:
                     continue
                 commenter_name = comment['user']['login']
+                # skip those users we aren't tracking (typically bots)
+                if commenter_name in user_exclude_list:
+                    continue
                 if commenter_name not in commenters:
                     commenters[commenter_name] = 1
                 else:
                     commenters[commenter_name] += 1
         except requests.Timeout:
             print(f"\tTimeout error: The request for {url} timed out")
+            continue  # to the next PR
         except requests.exceptions.RequestException as e:
-            print(f"\tRequest error: {e}")    
+            print(f"\tRequest error: {e} for {url}")
+            continue  # to the next PR
 
     if len(commenters) > 0:
         # convert commenters dictionary to list of dictionaries and sort by number of comments
         commenters_list = [{'commenter_name': k, 'num_comments': v}
-                        for k, v in commenters.items()]
+                           for k, v in commenters.items()]
         commenters_list = sorted(
             commenters_list, key=lambda x: x['num_comments'], reverse=True)
 
@@ -142,25 +201,23 @@ def get_prs_for_contributor(repo_owner: str, repo_name: str, contributor: str):
         "Authorization": f"Bearer {API_TOKEN}"
     }
 
+    # TO DO - test this new exponential backoff and make it a method, since they're all the same
     response = requests.get(url, headers=headers)
     if response.status_code != 200:
         if response.status_code == 422:  # Try again
-            retry_count: int = 0
-            bad_response: bool = True
-            while bad_response and retry_count < MAX_RETRIES:
+            for retry_attempt_delay in exponential_backoff_retry_delays:
+                retry_url = response.headers.get('Location')
+                # Wait for n seconds before checking the status
+                time.sleep(retry_attempt_delay)
+                retry_response_url: str = retry_url if retry_url else url
                 print(
-                    f"\tGot a 422 response on search/issues?q=type:pr+repo:{repo_owner}/{repo_name}+author:{contributor}+created:>{since_date}, so retrying after 5 sec...")
-                time.sleep(5)
-                retry_url = response.headers.get('Location')                
-                if retry_url:
-                    response = requests.get(retry_url, headers=headers)
-                    # Handle the status response
-                else:
-                    response = requests.get(url, headers=headers)                
+                    f"Retrying request for {retry_response_url} after {retry_attempt_delay} sec due to {response.status_code} response")
+                response = requests.get(
+                    retry_response_url, headers=headers)
+
+                # Check if the retry response is 200
                 if response.status_code == 200:
-                    bad_response = False
-                else: 
-                    retry_count +=1
+                    break  # Exit the loop on successful response
 
     if response.status_code == 200:
         return response.json()['total_count']
@@ -177,26 +234,28 @@ def get_workdays(start_date, end_date):
 
     return weekdays
 
+
 def convert_to_letter_grade(score):
     grades = ['F', 'D', 'C', 'B', 'A']
     modifiers = ['-', '', '+']
-    
+
     grade_idx = int(score) if score == 4 else int(score // 1)
     modifier_idx = 0
-    
+
     if (score - grade_idx) >= 0.666:
         modifier_idx = 2
     elif (score - grade_idx) >= 0.333:
         modifier_idx = 1
     elif score == 4:
         modifier_idx = 1
-    
+
     letter_grade = grades[grade_idx] + modifiers[modifier_idx]
-    
+
     return letter_grade
 
+
 def add_ntile_stats(df):
-    ntile = 10 # Decile
+    ntile = 10  # Decile
     # df is the dataframe of contributor stats. Calc ntiles, add columns, return new df
     df['prs_ntile'] = pd.qcut(
         df['prs_per_day'], ntile, labels=False, duplicates='drop')
@@ -211,6 +270,7 @@ def add_ntile_stats(df):
     df['avg_ntile'] = df[cols_to_average].mean(axis=1)
     # df['grade'] = df['avg_ntile'].apply(convert_to_letter_grade)
     return df
+
 
 def curve_scores(df, scores_column_name, curved_score_column_name):
     # Calculate the mean and standard deviation of the scores
@@ -229,27 +289,30 @@ def curve_scores(df, scores_column_name, curved_score_column_name):
     # Map the CDF values to a 0-100 range
     curved_scores = (cdf * 100).round().astype(int)
 
-    # Update the DataFrame with the curved scores
-    df[curved_score_column_name] = curved_scores
+    # Update the DataFrame with the curved scores, near left side since this is important data
+    df.insert(3, curved_score_column_name, curved_scores)
 
     return df
 
-def get_contributors_stats(repo_owner: str, repo_names: List[str], months_lookback: int) -> List[Tuple[str, str, str, float, float, float, float]]:
+
+def get_contributors_stats(repo_owner: str, repo_names: List[str], since_date: datetime) -> List[Tuple[str, str, str, float, float, float, float]]:
     headers = {
         "Authorization": f"Bearer {API_TOKEN}",
         "Accept": "application/vnd.github+json",
     }
 
-    today = datetime.now().date()
-    start_date = pd.Timestamp.today() - pd.DateOffset(months=DEFAULT_MONTHS_LOOKBACK)
-    end_date = pd.Timestamp.today()
+    today: datetime = datetime.now().date()
+    start_date: datetime = since_date
+    end_date: datetime = pd.Timestamp.today()  # Seems redundant with today above
     contributors = []
+    # {username: name} So we only call get_github_collaborator_name if we don't already have it
+    dict_user_names = {}
 
     max_num_workdays = get_workdays(start_date, end_date)
     for repo_name in repo_names:
         print(f"\n{repo_owner}/{repo_name}")
         list_dict_commenter_stats: list = get_commenters_stats(
-            repo_owner, repo_name, months_lookback)
+            repo_owner, repo_name, since_date)
         # Returns the total number of commits authored by the contributor. In addition, the response includes a Weekly Hash (weeks array) with the following information:
         # w - Start of the week, given as a Unix timestamp.
         # a - Number of additions
@@ -260,26 +323,21 @@ def get_contributors_stats(repo_owner: str, repo_names: List[str], months_lookba
 
         if response.status_code != 200:
             if response.status_code == 202:
-                retry_count: int = 0
-                bad_response: bool = True
-                while bad_response and retry_count < MAX_RETRIES:
+                for retry_attempt_delay in exponential_backoff_retry_delays:
                     retry_url = response.headers.get('Location')
-                    print(f"Retrying request for {repo_owner}/{repo_name} due to {response.status_code} response")
-                    if retry_url:
-                        # Wait for 5 seconds before checking the status
-                        time.sleep(5)
-                        response = requests.get(retry_url, headers=headers)
-                        # Handle the status response
-                    else:
-                        # Wait for 5 seconds before retrying the request
-                        time.sleep(5)
-                        response = requests.get(url, headers=headers)
-                    response.raise_for_status()
+                    # Wait for n seconds before checking the status
+                    time.sleep(retry_attempt_delay)
+                    retry_response_url: str = retry_url if retry_url else url
+                    print(
+                        f"Retrying request for {retry_response_url} after {retry_attempt_delay} sec due to {response.status_code} response")
+                    response = requests.get(
+                        retry_response_url, headers=headers)
 
+                    # Check if the retry response is 200
                     if response.status_code == 200:
-                        bad_response = False
-                    else: 
-                        retry_count +=1
+                        break  # Exit the loop on successful response
+
+                    response.raise_for_status()
             else:
                 response.raise_for_status()
 
@@ -295,23 +353,30 @@ def get_contributors_stats(repo_owner: str, repo_names: List[str], months_lookba
 
                 contributor_username = contributor.get(
                     "author", {}).get("login", "")
-                contributor_name = get_github_collaborator_name(
-                    contributor_username)
+                # See if we have cached it to avoid unnecessary duplicate calls to GH
+                if contributor_username not in dict_user_names:
+                    contributor_name = get_github_collaborator_name(
+                        contributor_username)
+                    dict_user_names[contributor_username] = contributor_name
+                else:
+                    contributor_name = dict_user_names[contributor_username]
+
                 if contributor_name is None:
                     contributor_name = contributor_username
                 print(f"\t{contributor_name} ({contributor_username})")
                 first_commit_date = get_first_commit_date(
                     repo_owner, repo_name, contributor_username)
                 num_workdays = max_num_workdays
-                # If their first commit is < roughly 6 weeks ago (configurable), 
-                # don't measure contributions. 
+                # If their first commit is < roughly 6 weeks ago (configurable),
+                # don't measure contributions.
                 if first_commit_date is not None:
-                    days_since_first_commit = get_workdays(first_commit_date, datetime.now())
-                if days_since_first_commit < MIN_WORKDAYS_AS_CONTRIBUTOR: 
+                    days_since_first_commit = get_workdays(
+                        first_commit_date, datetime.now())
+                if days_since_first_commit < MIN_WORKDAYS_AS_CONTRIBUTOR:
                     continue
                 # Conditionally override num workdays if they started after start date
                 if first_commit_date is not None and first_commit_date > start_date:
-                    num_workdays = get_workdays(first_commit_date, end_date)      
+                    num_workdays = get_workdays(first_commit_date, end_date)
 
                 # TO DO: if the contributor username is already in the array, use the one with the earliest date
                 # and add in the other stats to the existing stats
@@ -319,19 +384,20 @@ def get_contributors_stats(repo_owner: str, repo_names: List[str], months_lookba
                     if contributor_stats_dict["contributor_name"] == contributor_name:
                         contributor_stats = contributor_stats_dict
                         contributor_already_added = True
-                        print(f"\t\tMerging stats for {contributor_name} ({contributor_username}) with previously found contributor {contributor_stats_dict['contributor_name']} ({contributor_stats_dict['contributor_username']})")
+                        print(
+                            f"\t\tMerging stats for {contributor_name} ({contributor_username}) with previously found contributor {contributor_stats_dict['contributor_name']} ({contributor_stats_dict['contributor_username']})")
                         break
 
                 # if this is the first time we've seen this contributor, init a dict
                 if contributor_stats is None:
                     contributor_stats = {"repo": repo_name, "contributor_name": contributor_name,
-                                     "contributor_username":  contributor_username,
-                                     "stats_beginning": start_date,
-                                     "stats_ending": today,
-                                     "contributor_first_commit_date": first_commit_date,
-                                     "num_workdays": num_workdays, "commits": 0, "prs": 0,
-                                     "review_comments": 0, "changed_lines": 0}
-                
+                                         "contributor_username":  contributor_username,
+                                         "stats_beginning": start_date,
+                                         "stats_ending": today,
+                                         "contributor_first_commit_date": first_commit_date,
+                                         "num_workdays": num_workdays, "commits": 0, "prs": 0,
+                                         "review_comments": 0, "changed_lines": 0}
+
                 for weekly_stat in contributor["weeks"]:
                     weekly_date = datetime.utcfromtimestamp(
                         weekly_stat["w"])
@@ -371,12 +437,14 @@ def get_contributors_stats(repo_owner: str, repo_names: List[str], months_lookba
 
                 if not contributor_already_added:
                     contributors.append(contributor_stats)
-        else: 
+        else:
             response.raise_for_status()
 
     return contributors
 
 # Shorten filename
+
+
 def truncate_filename(repos):
     max_length = 230
     if len(repos) > max_length:
@@ -384,6 +452,7 @@ def truncate_filename(repos):
         # remove any illegal characters
         # filename = ''.join(c for c in filename if c.isalnum() or c in ['_', '.', ' '])
     return repos
+
 
 def save_contributors_to_csv(contributors, filename):
     df = None
@@ -402,17 +471,129 @@ def save_contributors_to_csv(contributors, filename):
     return df
 
 
+# These routines aren't used yet.
+def first_other_topic(repo: Repository) -> str | None:
+    filtered_topics = (
+        topic for topic in repo.topics
+        if topic != TOPIC
+    )
+    return next(filtered_topics, 'none')
+
+# Unused
+
+
+def print_by_subsystem_group(repos: PaginatedList[Repository]) -> None:
+    repos = sorted(repos, key=first_other_topic)
+
+    for key, group in itertools.groupby(repos, first_other_topic):
+        print(f'{key}:')
+
+        repos_sorted_by_pushed_at = sorted(
+            group, key=lambda repo: repo.pushed_at)
+        repo: Repository
+
+        for repo in repos_sorted_by_pushed_at:
+            print(f'  - name: {repo.name}')
+            print(f'    pushed_at: {repo.pushed_at}')
+
+
+# Get a list of repo names and filter by those that have been pushed to in the time provided
+def print_as_csv_limited_by_date(repos: PaginatedList[Repository], date_threshold: datetime) -> []:
+    filtered_repos = (
+        repo for repo in repos
+        if repo.pushed_at >= date_threshold
+    )
+
+    sorted_filtered_repos = sorted(filtered_repos, key=lambda repo: repo.name)
+
+    print(','.join(
+        [repo.name for repo in sorted_filtered_repos]
+    ))
+    return sorted_filtered_repos
+
+
+def get_repos_by_topic(repo_owner, topic, topic_exclude, since_date_str):
+    # url = f'https://api.github.com/search/repositories?q=topic:{topic}+org:{repo_owner}+pushed:>={since_date_str}&per_page={MAX_ITEMS_PER_PAGE}'
+    url = (
+        f'https://api.github.com/search/repositories?q=topic:{topic}'
+        f'+org:{repo_owner}'
+        f'+pushed:>={since_date_str}'
+        f'{"+-topic:" + topic_exclude if topic_exclude is not None else ""}'
+        f'&per_page={MAX_ITEMS_PER_PAGE}'
+    )
+
+    headers = {
+        "Accept": "application/vnd.github.v3+json",
+        "Authorization": f"Bearer {API_TOKEN}"
+    }
+
+    response = requests.get(url, headers=headers)
+    if response.status_code != 200:
+        if response.status_code == 422:  # Try again
+            for retry_attempt_delay in exponential_backoff_retry_delays:
+                retry_url = response.headers.get('Location')
+                # Wait for n seconds before checking the status
+                time.sleep(retry_attempt_delay)
+                retry_response_url: str = retry_url if retry_url else url
+                print(
+                    f"Retrying request for {retry_response_url} after {retry_attempt_delay} sec due to {response.status_code} response")
+                response = requests.get(
+                    retry_response_url, headers=headers)
+
+                # Check if the retry response is 200
+                if response.status_code == 200:
+                    break  # Exit the loop on successful response
+
+    item_list: {} = {}
+    item_list_returned: [] = []
+    if response.status_code == 200:
+        item_list = response.json().get('items', [])
+        for item in item_list:
+            item_list_returned.append(item["name"])
+        return item_list_returned
+
+
 if __name__ == "__main__":
+    # Get the env settings
     repo_owner = os.getenv("REPO_OWNER")
-    repo_names = os.getenv("REPO_NAMES").split(",")
+    repo_names_env = os.getenv("REPO_NAMES")
+    repo_names = repo_names_env.split(",") if repo_names_env else []
     months_lookback = int(os.getenv("DEFAULT_MONTHS_LOOKBACK", 3))
+    topic_env = os.getenv("TOPIC")
+    topic_name = topic_env if topic_env else None
+    topic_exclude_env = os.getenv("TOPIC_EXCLUDE")
+    topic_exclude_name = topic_exclude_env if topic_exclude_env else None
+    if months_lookback < 1:
+        months_lookback = 3
+
+    default_lookback = int(os.getenv('DEFAULT_MONTHS_LOOKBACK', 3))
+    since_date: datetime = get_date_months_ago(default_lookback)
+    since_date_str: str = since_date.strftime('%Y-%m-%d')
+
+    # If there were no repo_names in .env, we can pull the repos based on the topic
+    if len(repo_names) == 0 and topic_name is not None:
+        repo_names = get_repos_by_topic(
+            repo_owner, topic_name, topic_exclude_name, since_date_str)
+
+    else:
+        print(f'Either TOPIC or REPO_NAMES must be provided in .env')
+        sys.exit()
+
+    # Tell the user what they're getting
+    print(f'Stats for {repo_owner} repos:')
+    print(f', '.join(repo_names))
+    print(f':')
+
+    # This does all the work
+    contributors_stats = get_contributors_stats(
+        repo_owner, repo_names, since_date)
 
     date_string = date.today().strftime('%Y-%m-%d')
-    contributors_stats = get_contributors_stats(
-        repo_owner, repo_names, months_lookback)
-    filename = truncate_filename(f'{date_string}-{months_lookback}-{repo_owner}_{repo_names}')
-    df = save_contributors_to_csv(contributors_stats, f'contribs_{filename}.csv')
+    filename = truncate_filename(
+        f'{date_string}-{months_lookback}-{repo_owner}_{repo_names}')
+    df = save_contributors_to_csv(
+        contributors_stats, f'contribs_{filename}.csv')
     summary = df.describe()
 
     # write the summary statistics to a new CSV file
-    summary.to_csv( f'summary_{filename}.csv')
+    summary.to_csv(f'summary_{filename}.csv')
