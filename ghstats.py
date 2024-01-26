@@ -29,7 +29,7 @@ def get_date_months_ago(months_ago) -> datetime:
     date_months_ago = current_date - relativedelta(months=months_ago)
     return date_months_ago
 
-# TO DO - test this new exponential backoff and use this function instead of the inline code below
+# Hit the url and back off retries if we get 202 or 422
 
 
 def github_request_exponential_backoff(url):
@@ -41,7 +41,7 @@ def github_request_exponential_backoff(url):
 
     response = requests.get(url, headers=headers)
     if response.status_code != 200:
-        if response.status_code == 422:  # Try again
+        if response.status_code == 422 or response.status_code == 202:  # Try again
             for retry_attempt_delay in exponential_backoff_retry_delays_list:
                 retry_url = response.headers.get('Location')
                 # Wait for n seconds before checking the status
@@ -57,7 +57,9 @@ def github_request_exponential_backoff(url):
                     break  # Exit the loop on successful response
 
     if response.status_code == 200:
-        return
+        return response.json()
+    else:
+        return None
 
 
 def get_github_collaborator_name(username):
@@ -87,16 +89,11 @@ def get_github_collaborator_name(username):
     else:
         return None
 
-# TO DO there's a bug here. Commenters who haven't committed in months are getting credit?
-# Long gone employees
-
 
 def get_commenters_stats(repo_owner, repo_name, since_date: datetime):
     # Exclude bot users who don't get measured
     user_exclude_env: str = os.getenv('USER_EXCLUDE', None)
     user_exclude_list = user_exclude_env.split(',') if user_exclude_env else []
-    if (len(user_exclude_list) > 0):
-        print(f'Excluding PR comments from {user_exclude_list}')
     commenters_list = []
     # calculate start and end dates
     today: datetime = datetime.now().date()
@@ -188,6 +185,8 @@ def get_first_commit_date(repo_owner, repo_name, contributor_username):
 
     return datetime.strptime(first_commit_date, '%Y-%m-%d')
 
+# Return a count of PRs for a contributor or None
+
 
 def get_prs_for_contributor(repo_owner: str, repo_name: str, contributor: str):
     access_token = API_TOKEN
@@ -202,25 +201,30 @@ def get_prs_for_contributor(repo_owner: str, repo_name: str, contributor: str):
     }
 
     # TO DO - test this new exponential backoff and make it a method, since they're all the same
-    response = requests.get(url, headers=headers)
-    if response.status_code != 200:
-        if response.status_code == 422:  # Try again
-            for retry_attempt_delay in exponential_backoff_retry_delays:
-                retry_url = response.headers.get('Location')
-                # Wait for n seconds before checking the status
-                time.sleep(retry_attempt_delay)
-                retry_response_url: str = retry_url if retry_url else url
-                print(
-                    f"Retrying request for {retry_response_url} after {retry_attempt_delay} sec due to {response.status_code} response")
-                response = requests.get(
-                    retry_response_url, headers=headers)
+    response = github_request_exponential_backoff(url)
+    # response = requests.get(url, headers=headers)
+    # if response.status_code != 200:
+    #     if response.status_code == 422:  # Try again
+    #         for retry_attempt_delay in exponential_backoff_retry_delays:
+    #             retry_url = response.headers.get('Location')
+    #             # Wait for n seconds before checking the status
+    #             time.sleep(retry_attempt_delay)
+    #             retry_response_url: str = retry_url if retry_url else url
+    #             print(
+    #                 f"Retrying request for {retry_response_url} after {retry_attempt_delay} sec due to {response.status_code} response")
+    #             response = requests.get(
+    #                 retry_response_url, headers=headers)
 
-                # Check if the retry response is 200
-                if response.status_code == 200:
-                    break  # Exit the loop on successful response
+    #             # Check if the retry response is 200
+    #             if response.status_code == 200:
+    #                 break  # Exit the loop on successful response
 
-    if response.status_code == 200:
-        return response.json()['total_count']
+    # if response.status_code == 200:
+    #   return response.json()['total_count']
+    if response is not None and 'total_count' in response:
+        return response['total_count']
+    else:
+        return None
 
 
 def get_workdays(start_date, end_date):
@@ -319,31 +323,36 @@ def get_contributors_stats(repo_owner: str, repo_names: List[str], since_date: d
         # d - Number of deletions
         # c - Number of commits
         url = f"{GITHUB_API_BASE_URL}/repos/{repo_owner}/{repo_name}/stats/contributors?per_page={MAX_ITEMS_PER_PAGE}"
-        response = requests.get(url, headers=headers)
 
-        if response.status_code != 200:
-            if response.status_code == 202:
-                for retry_attempt_delay in exponential_backoff_retry_delays:
-                    retry_url = response.headers.get('Location')
-                    # Wait for n seconds before checking the status
-                    time.sleep(retry_attempt_delay)
-                    retry_response_url: str = retry_url if retry_url else url
-                    print(
-                        f"Retrying request for {retry_response_url} after {retry_attempt_delay} sec due to {response.status_code} response")
-                    response = requests.get(
-                        retry_response_url, headers=headers)
+        # response = requests.get(url, headers=headers)
 
-                    # Check if the retry response is 200
-                    if response.status_code == 200:
-                        break  # Exit the loop on successful response
+        # if response.status_code != 200:
+        #     if response.status_code == 202:
+        #         for retry_attempt_delay in exponential_backoff_retry_delays:
+        #             retry_url = response.headers.get('Location')
+        #             # Wait for n seconds before checking the status
+        #             time.sleep(retry_attempt_delay)
+        #             retry_response_url: str = retry_url if retry_url else url
+        #             print(
+        #                 f"Retrying request for {retry_response_url} after {retry_attempt_delay} sec due to {response.status_code} response")
+        #             response = requests.get(
+        #                 retry_response_url, headers=headers)
 
-                    response.raise_for_status()
-            else:
-                response.raise_for_status()
+        #             # Check if the retry response is 200
+        #             if response.status_code == 200:
+        #                 break  # Exit the loop on successful response
+
+        #             response.raise_for_status()
+        #     else:
+        #         response.raise_for_status()
 
         # Handle the response
-        if response.status_code == 200:
-            for contributor in response.json():
+        # if response.status_code == 200:
+        #   for contributor in response.json():
+        # Get a list of contributors to this repo
+        response = github_request_exponential_backoff(url)
+        if response is not None and isinstance(response, list):
+            for contributor in response:
                 first_commit_date: date = None
                 contributor_name: str = None
                 contributor_username: str = None
@@ -437,8 +446,12 @@ def get_contributors_stats(repo_owner: str, repo_names: List[str], since_date: d
 
                 if not contributor_already_added:
                     contributors.append(contributor_stats)
+
+        # This means we have nothing returned from our attempt to get contributors for a repo
         else:
-            response.raise_for_status()
+            print(
+                f'\tNo contributors found for {repo_name} since {since_date}.')
+            continue
 
     return contributors
 
@@ -457,59 +470,24 @@ def truncate_filename(repos):
 def save_contributors_to_csv(contributors, filename):
     df = None
     if len(contributors) > 0:
+        # Clean up
         df = pd.DataFrame(contributors)
         df["commits_per_day"] = df['commits_per_day'].fillna(0)
         df["changed_lines_per_day"] = df['changed_lines_per_day'].fillna(0)
         df["prs_per_day"] = df['prs_per_day'].fillna(0)
         df["review_comments_per_day"] = df['review_comments_per_day'].fillna(0)
         df["prs_per_day"] = df['prs_per_day'].fillna(0)
+        # Remove any rows where there are no commits and no PRs.
+        # I'm seeing Github return PR comments from people who were not involved in the lookback
+        # period. I haven't diagnosed this. This is a hacky way to get rid of them.
+        # Obvy, if PRs and commits are zero, so are changed_lines.
+        df = df[~((df['commits'] == 0) & (df['prs'] == 0))]
         df = add_ntile_stats(df)
         df = curve_scores(df, "avg_ntile", "curved_score")
         df.to_csv(filename, index=False)
     else:
         print(f"\t No contributors for {filename}")
     return df
-
-
-# These routines aren't used yet.
-def first_other_topic(repo: Repository) -> str | None:
-    filtered_topics = (
-        topic for topic in repo.topics
-        if topic != TOPIC
-    )
-    return next(filtered_topics, 'none')
-
-# Unused
-
-
-def print_by_subsystem_group(repos: PaginatedList[Repository]) -> None:
-    repos = sorted(repos, key=first_other_topic)
-
-    for key, group in itertools.groupby(repos, first_other_topic):
-        print(f'{key}:')
-
-        repos_sorted_by_pushed_at = sorted(
-            group, key=lambda repo: repo.pushed_at)
-        repo: Repository
-
-        for repo in repos_sorted_by_pushed_at:
-            print(f'  - name: {repo.name}')
-            print(f'    pushed_at: {repo.pushed_at}')
-
-
-# Get a list of repo names and filter by those that have been pushed to in the time provided
-def print_as_csv_limited_by_date(repos: PaginatedList[Repository], date_threshold: datetime) -> []:
-    filtered_repos = (
-        repo for repo in repos
-        if repo.pushed_at >= date_threshold
-    )
-
-    sorted_filtered_repos = sorted(filtered_repos, key=lambda repo: repo.name)
-
-    print(','.join(
-        [repo.name for repo in sorted_filtered_repos]
-    ))
-    return sorted_filtered_repos
 
 
 def get_repos_by_topic(repo_owner, topic, topic_exclude, since_date_str):
