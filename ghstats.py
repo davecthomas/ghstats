@@ -101,7 +101,8 @@ def get_commenters_stats(repo_owner, repo_name, since_date: datetime):
     end_date: datetime = today + timedelta(days=1)
 
     # get all pull requests for the repo within the lookback period
-    url = f"https://api.github.com/repos/{repo_owner}/{repo_name}/pulls?state=closed&since={start_date}&until={end_date}&per_page={MAX_ITEMS_PER_PAGE}"
+    base_pr_url: str = f"https://api.github.com/repos/{repo_owner}/{repo_name}/pulls"
+    url = f"{base_pr_url}?state=closed&since={start_date}&until={end_date}&per_page={MAX_ITEMS_PER_PAGE}"
     headers = {
         "Authorization": f"Bearer {API_TOKEN}",
         "Accept": "application/vnd.github+json",
@@ -114,6 +115,7 @@ def get_commenters_stats(repo_owner, repo_name, since_date: datetime):
     except requests.Timeout:
         print(
             f"\tTimeout error: The request for {url} timed out")
+
     except requests.exceptions.RequestException as e:
         print(f"\tRequest error: {e} for {url}")
 
@@ -123,8 +125,14 @@ def get_commenters_stats(repo_owner, repo_name, since_date: datetime):
         url = pr['comments_url']
         comments = []
         try:
+            # Get comments
             response = requests.get(url, headers=headers)
             comments = response.json()
+
+            # Get reviews with changes requested
+            reviews_url = f"{base_pr_url}/{pr['number']}/reviews"
+            review_response = requests.get(reviews_url, headers=headers)
+            reviews = review_response.json()
 
             for comment in comments:
                 if "user" not in comment:
@@ -137,6 +145,19 @@ def get_commenters_stats(repo_owner, repo_name, since_date: datetime):
                     commenters[commenter_name] = 1
                 else:
                     commenters[commenter_name] += 1
+
+            # Count CHANGES_REQUESTED reviews by the specified user
+            for review in reviews:
+                reviewer_name: str = review['user']['login']
+                # skip those users we aren't tracking (typically bots)
+                if reviewer_name in user_exclude_list:
+                    continue
+                if review['state'] == 'CHANGES_REQUESTED':
+                    if reviewer_name not in commenters:
+                        commenters[reviewer_name] = 1
+                    else:
+                        commenters[reviewer_name] += 1
+
         except requests.Timeout:
             print(f"\tTimeout error: The request for {url} timed out")
             continue  # to the next PR
@@ -187,6 +208,8 @@ def get_first_commit_date(repo_owner, repo_name, contributor_username):
 
 # Return a count of PRs for a contributor or None
 
+# This is missing PRs - check it for AP
+
 
 def get_prs_for_contributor(repo_owner: str, repo_name: str, contributor: str):
     access_token = API_TOKEN
@@ -202,25 +225,7 @@ def get_prs_for_contributor(repo_owner: str, repo_name: str, contributor: str):
 
     # TO DO - test this new exponential backoff and make it a method, since they're all the same
     response = github_request_exponential_backoff(url)
-    # response = requests.get(url, headers=headers)
-    # if response.status_code != 200:
-    #     if response.status_code == 422:  # Try again
-    #         for retry_attempt_delay in exponential_backoff_retry_delays:
-    #             retry_url = response.headers.get('Location')
-    #             # Wait for n seconds before checking the status
-    #             time.sleep(retry_attempt_delay)
-    #             retry_response_url: str = retry_url if retry_url else url
-    #             print(
-    #                 f"Retrying request for {retry_response_url} after {retry_attempt_delay} sec due to {response.status_code} response")
-    #             response = requests.get(
-    #                 retry_response_url, headers=headers)
 
-    #             # Check if the retry response is 200
-    #             if response.status_code == 200:
-    #                 break  # Exit the loop on successful response
-
-    # if response.status_code == 200:
-    #   return response.json()['total_count']
     if response is not None and 'total_count' in response:
         return response['total_count']
     else:
@@ -270,7 +275,7 @@ def add_ntile_stats(df):
     df['review_comments_ntile'] = pd.qcut(
         df['review_comments_per_day'], ntile, labels=False, duplicates='drop',)
     cols_to_average = ['prs_ntile', 'commits_ntile',
-                       'review_comments_ntile']
+                       'review_comments_ntile', 'lines_of_code_ntile']
     df['avg_ntile'] = df[cols_to_average].mean(axis=1)
     # df['grade'] = df['avg_ntile'].apply(convert_to_letter_grade)
     return df
@@ -324,31 +329,6 @@ def get_contributors_stats(repo_owner: str, repo_names: List[str], since_date: d
         # c - Number of commits
         url = f"{GITHUB_API_BASE_URL}/repos/{repo_owner}/{repo_name}/stats/contributors?per_page={MAX_ITEMS_PER_PAGE}"
 
-        # response = requests.get(url, headers=headers)
-
-        # if response.status_code != 200:
-        #     if response.status_code == 202:
-        #         for retry_attempt_delay in exponential_backoff_retry_delays:
-        #             retry_url = response.headers.get('Location')
-        #             # Wait for n seconds before checking the status
-        #             time.sleep(retry_attempt_delay)
-        #             retry_response_url: str = retry_url if retry_url else url
-        #             print(
-        #                 f"Retrying request for {retry_response_url} after {retry_attempt_delay} sec due to {response.status_code} response")
-        #             response = requests.get(
-        #                 retry_response_url, headers=headers)
-
-        #             # Check if the retry response is 200
-        #             if response.status_code == 200:
-        #                 break  # Exit the loop on successful response
-
-        #             response.raise_for_status()
-        #     else:
-        #         response.raise_for_status()
-
-        # Handle the response
-        # if response.status_code == 200:
-        #   for contributor in response.json():
         # Get a list of contributors to this repo
         response = github_request_exponential_backoff(url)
         if response is not None and isinstance(response, list):
@@ -395,6 +375,9 @@ def get_contributors_stats(repo_owner: str, repo_names: List[str], since_date: d
                         contributor_already_added = True
                         print(
                             f"\t\tMerging stats for {contributor_name} ({contributor_username}) with previously found contributor {contributor_stats_dict['contributor_name']} ({contributor_stats_dict['contributor_username']})")
+                        contributor_stats["repo"] = f"{contributor_stats['repo']},{repo_name}"
+                        if first_commit_date < contributor_stats["contributor_first_commit_date"]:
+                            contributor_stats["contributor_first_commit_date"] = first_commit_date
                         break
 
                 # if this is the first time we've seen this contributor, init a dict
@@ -415,11 +398,10 @@ def get_contributors_stats(repo_owner: str, repo_names: List[str], since_date: d
                         contributor_stats["commits"] += weekly_stat["c"]
                         contributor_stats["changed_lines"] += weekly_stat.get(
                             "d", 0) + weekly_stat.get("a", 0)
-
-                prs = get_prs_for_contributor(
+                prs_count = get_prs_for_contributor(
                     repo_owner, repo_name, contributor_username)
-                if prs is not None:
-                    contributor_stats["prs"] += prs
+                if prs_count is not None:
+                    contributor_stats["prs"] += prs_count
                 for dict_commenter_stats in list_dict_commenter_stats:
                     if dict_commenter_stats["commenter_name"] == contributor_username:
                         contributor_stats["review_comments"] += dict_commenter_stats["num_comments"]
@@ -553,7 +535,7 @@ if __name__ == "__main__":
         repo_names = get_repos_by_topic(
             repo_owner, topic_name, topic_exclude_name, since_date_str)
 
-    else:
+    if len(repo_names) == 0 and topic_name is None:
         print(f'Either TOPIC or REPO_NAMES must be provided in .env')
         sys.exit()
 
@@ -571,7 +553,7 @@ if __name__ == "__main__":
         f'{date_string}-{months_lookback}-{repo_owner}_{repo_names}')
     df = save_contributors_to_csv(
         contributors_stats, f'contribs_{filename}.csv')
-    summary = df.describe()
+    # summary = df.describe()
 
     # write the summary statistics to a new CSV file
-    summary.to_csv(f'summary_{filename}.csv')
+    # summary.to_csv(f'summary_{filename}.csv')
