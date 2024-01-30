@@ -29,7 +29,31 @@ def get_date_months_ago(months_ago) -> datetime:
     date_months_ago = current_date - relativedelta(months=months_ago)
     return date_months_ago
 
-# Hit the url and back off retries if we get 202 or 422
+# Sleep seconds from now to the future time passed in
+
+
+def sleep_until_ratelimit_reset_time(reset_epoch_time):
+    # Convert the reset time from Unix epoch time to a datetime object
+    reset_time = datetime.utcfromtimestamp(reset_epoch_time)
+
+    # Get the current time
+    now = datetime.utcnow()
+
+    # Calculate the time difference
+    time_diff = reset_time - now
+
+    # Check if the sleep time is negative, which can happen if the reset time has passed
+    if time_diff.total_seconds() < 0:
+        print("The rate limit reset time has already passed.")
+        return 0
+
+    # Print the sleep time using timedelta's string representation
+    print(f"Sleeping until rate limit reset: {time_diff}")
+
+    time.sleep(time_diff.total_seconds())
+    return
+
+# Retry backoff in 422, 202, or 403 (rate limit exceeded) responses
 
 
 def github_request_exponential_backoff(url):
@@ -41,24 +65,40 @@ def github_request_exponential_backoff(url):
 
     response = requests.get(url, headers=headers)
     if response.status_code != 200:
-        if response.status_code == 422 or response.status_code == 202:  # Try again
+        if response.status_code == 422 or response.status_code == 202 or response.status_code == 403:  # Try again
             for retry_attempt_delay in exponential_backoff_retry_delays_list:
                 retry_url = response.headers.get('Location')
+                # The only time we override the exponential backoff if we are asked by Github to wait
+                if 'Retry-After' in response.headers:
+                    retry_attempt_delay = response.headers.get('Retry-After')
                 # Wait for n seconds before checking the status
                 time.sleep(retry_attempt_delay)
                 retry_response_url: str = retry_url if retry_url else url
                 print(
                     f"Retrying request for {retry_response_url} after {retry_attempt_delay} sec due to {response.status_code} response")
+                if response.status_code == 403 and 'X-Ratelimit-Remaining' in response.headers:
+                    if response.headers['X-Ratelimit-Remaining'] == 0:
+                        print(
+                            f"403 forbidden response header shows X-Ratelimit-Remaining at {response.headers['X-Ratelimit-Remaining']} requests.")
+                        sleep_until_ratelimit_reset_time(
+                            int(response.headers['X-RateLimit-Reset']))
+
                 response = requests.get(
                     retry_response_url, headers=headers)
 
                 # Check if the retry response is 200
                 if response.status_code == 200:
                     break  # Exit the loop on successful response
+                else:
+                    print(
+                        f"Retried request bad response status code: {response.status_code}")
 
     if response.status_code == 200:
+        print(f"Retry successful. Status code: {response.status_code}")
         return response.json()
     else:
+        print(
+            f"Retries exhausted. Giving up. Status code: {response.status_code}")
         return None
 
 
@@ -207,23 +247,16 @@ def get_first_commit_date(repo_owner, repo_name, contributor_username):
     return datetime.strptime(first_commit_date, '%Y-%m-%d')
 
 # Return a count of PRs for a contributor or None
-
 # This is missing PRs - check it for AP
 
 
 def get_prs_for_contributor(repo_owner: str, repo_name: str, contributor: str):
-    access_token = API_TOKEN
     default_lookback = int(os.getenv('DEFAULT_MONTHS_LOOKBACK', 3))
     since_date = (datetime.now(
     ) - timedelta(weeks=default_lookback*4)).strftime('%Y-%m-%dT%H:%M:%SZ')
 
     url = f'https://api.github.com/search/issues?q=type:pr+repo:{repo_owner}/{repo_name}+author:{contributor}+created:>{since_date}&per_page={MAX_ITEMS_PER_PAGE}'
-    headers = {
-        "Accept": "application/vnd.github.v3+json",
-        "Authorization": f"Bearer {API_TOKEN}"
-    }
 
-    # TO DO - test this new exponential backoff and make it a method, since they're all the same
     response = github_request_exponential_backoff(url)
 
     if response is not None and 'total_count' in response:
@@ -542,13 +575,12 @@ if __name__ == "__main__":
     # Tell the user what they're getting
     print(f'Stats for {repo_owner} repos:')
     print(f', '.join(repo_names))
-    print(f':')
 
     # This does all the work
     contributors_stats = get_contributors_stats(
         repo_owner, repo_names, since_date)
 
-    date_string = date.today().strftime('%Y-%m-%d')
+    date_string = datetime.now().strftime('%Y-%m-%d-%H%M')
     filename = truncate_filename(
         f'{date_string}-{months_lookback}-{repo_owner}_{repo_names}')
     df = save_contributors_to_csv(
