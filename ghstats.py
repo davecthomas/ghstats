@@ -1,5 +1,5 @@
 from __future__ import annotations
-
+from typing import Dict, Any
 import json
 from datetime import datetime, timezone
 from datetime import timedelta, date
@@ -20,8 +20,6 @@ DEFAULT_MONTHS_LOOKBACK = int(os.getenv("DEFAULT_MONTHS_LOOKBACK", 0))
 API_TOKEN = os.getenv("GITHUB_API_TOKEN")
 MAX_ITEMS_PER_PAGE = int(os.getenv("MAX_ITEMS_PER_PAGE", 1000))
 MIN_WORKDAYS_AS_CONTRIBUTOR = int(os.getenv("MIN_WORKDAYS_AS_CONTRIBUTOR", 30))
-# WIP: changing HTTP 202 response retry logic
-exponential_backoff_retry_delays: list[int] = [1, 2, 4, 8, 16]
 
 
 def get_date_months_ago(months_ago) -> datetime:
@@ -44,20 +42,19 @@ def sleep_until_ratelimit_reset_time(reset_epoch_time):
 
     # Check if the sleep time is negative, which can happen if the reset time has passed
     if time_diff.total_seconds() < 0:
-        print("The rate limit reset time has already passed.")
-        return 0
-
-    # Print the sleep time using timedelta's string representation
-    print(f"Sleeping until rate limit reset: {time_diff}")
-
-    time.sleep(time_diff.total_seconds())
+        print("No sleep required. The rate limit reset time has already passed.")
+    else:
+        time_diff = timedelta(seconds=int(time_diff.total_seconds()))
+        # Print the sleep time using timedelta's string representation
+        print(f"Sleeping until rate limit reset: {time_diff}")
+        time.sleep(time_diff.total_seconds())
     return
 
 # Retry backoff in 422, 202, or 403 (rate limit exceeded) responses
 
 
 def github_request_exponential_backoff(url):
-    exponential_backoff_retry_delays_list: list[int] = [1, 2, 4, 8, 16]
+    exponential_backoff_retry_delays_list: list[int] = [1, 2, 4, 8, 16, 32, 64]
     headers = {
         "Accept": "application/vnd.github.v3+json",
         "Authorization": f"Bearer {API_TOKEN}"
@@ -65,7 +62,12 @@ def github_request_exponential_backoff(url):
 
     response = requests.get(url, headers=headers)
     if response.status_code != 200:
-        if response.status_code == 422 or response.status_code == 202 or response.status_code == 403:  # Try again
+        if response.status_code == 422 and response.reason == "Unprocessable Entity":
+            dict_error: Dict[str, any] = json.loads(response.text)
+            print(
+                f"Skipping: {response.status_code} {response.reason} for url {url}\n\t{dict_error['message']}\n\t{dict_error['errors'][0]['message']}")
+
+        elif response.status_code == 202 or response.status_code == 403:  # Try again
             for retry_attempt_delay in exponential_backoff_retry_delays_list:
                 retry_url = response.headers.get('Location')
                 # The only time we override the exponential backoff if we are asked by Github to wait
@@ -77,7 +79,7 @@ def github_request_exponential_backoff(url):
                 print(
                     f"Retrying request for {retry_response_url} after {retry_attempt_delay} sec due to {response.status_code} response")
                 if response.status_code == 403 and 'X-Ratelimit-Remaining' in response.headers:
-                    if response.headers['X-Ratelimit-Remaining'] == 0:
+                    if int(response.headers['X-Ratelimit-Remaining']) == 0:
                         print(
                             f"403 forbidden response header shows X-Ratelimit-Remaining at {response.headers['X-Ratelimit-Remaining']} requests.")
                         sleep_until_ratelimit_reset_time(
@@ -91,10 +93,10 @@ def github_request_exponential_backoff(url):
                     break  # Exit the loop on successful response
                 else:
                     print(
-                        f"Retried request bad response status code: {response.status_code}")
+                        f"\tRetried request and still got bad response status code: {response.status_code}")
 
     if response.status_code == 200:
-        print(f"Retry successful. Status code: {response.status_code}")
+        # print(f"Retry successful. Status code: {response.status_code}")
         return response.json()
     else:
         print(
@@ -116,14 +118,11 @@ def get_github_collaborator_name(username):
     str: The name of the collaborator, or None if the collaborator is not found or there is an error retrieving their information.
     """
     url = f"https://api.github.com/users/{username}"
-    headers = {
-        "Accept": "application/vnd.github.v3+json",
-        "Authorization": f"Bearer {API_TOKEN}"
-    }
-    response = requests.get(url, headers=headers)
 
-    if response.status_code == 200:
-        collaborator_info = json.loads(response.text)
+    response = github_request_exponential_backoff(url)
+
+    if response is not None:
+        collaborator_info = response
         collaborator_name = collaborator_info['name']
         return collaborator_name
     else:
@@ -143,67 +142,54 @@ def get_commenters_stats(repo_owner, repo_name, since_date: datetime):
     # get all pull requests for the repo within the lookback period
     base_pr_url: str = f"https://api.github.com/repos/{repo_owner}/{repo_name}/pulls"
     url = f"{base_pr_url}?state=closed&since={start_date}&until={end_date}&per_page={MAX_ITEMS_PER_PAGE}"
-    headers = {
-        "Authorization": f"Bearer {API_TOKEN}",
-        "Accept": "application/vnd.github+json",
-    }
-    pull_requests = []
-    try:
-        response = requests.get(url, headers=headers)
-        response.raise_for_status()  # Optional: Check for HTTP errors
-        pull_requests = response.json()
-    except requests.Timeout:
-        print(
-            f"\tTimeout error: The request for {url} timed out")
 
-    except requests.exceptions.RequestException as e:
-        print(f"\tRequest error: {e} for {url}")
+    pull_requests = []
+
+    response = github_request_exponential_backoff(url)
+    if response is not None:
+        pull_requests = response
 
     # get all comments for each pull request and add up the number of comments per commenter
     commenters = {}
     for pr in pull_requests:
-        url = pr['comments_url']
+        pr_url = pr['comments_url']
         comments = []
-        try:
-            # Get comments
-            response = requests.get(url, headers=headers)
-            comments = response.json()
+        reviews = []
 
-            # Get reviews with changes requested
-            reviews_url = f"{base_pr_url}/{pr['number']}/reviews"
-            review_response = requests.get(reviews_url, headers=headers)
-            reviews = review_response.json()
+        # Get comments
+        comments_response = github_request_exponential_backoff(pr_url)
+        if comments_response is not None:
+            comments = comments_response
 
-            for comment in comments:
-                if "user" not in comment:
-                    continue
-                commenter_name = comment['user']['login']
-                # skip those users we aren't tracking (typically bots)
-                if commenter_name in user_exclude_list:
-                    continue
-                if commenter_name not in commenters:
-                    commenters[commenter_name] = 1
+        # Get reviews with changes requested
+        reviews_url = f"{base_pr_url}/{pr['number']}/reviews"
+        review_response = github_request_exponential_backoff(reviews_url)
+        if review_response is not None:
+            reviews = review_response
+
+        for comment in comments:
+            if "user" not in comment:
+                continue
+            commenter_name = comment['user']['login']
+            # skip those users we aren't tracking (typically bots)
+            if commenter_name in user_exclude_list:
+                continue
+            if commenter_name not in commenters:
+                commenters[commenter_name] = 1
+            else:
+                commenters[commenter_name] += 1
+
+        # Count CHANGES_REQUESTED reviews by the specified user
+        for review in reviews:
+            reviewer_name: str = review['user']['login']
+            # skip those users we aren't tracking (typically bots)
+            if reviewer_name in user_exclude_list:
+                continue
+            if review['state'] == 'CHANGES_REQUESTED':
+                if reviewer_name not in commenters:
+                    commenters[reviewer_name] = 1
                 else:
-                    commenters[commenter_name] += 1
-
-            # Count CHANGES_REQUESTED reviews by the specified user
-            for review in reviews:
-                reviewer_name: str = review['user']['login']
-                # skip those users we aren't tracking (typically bots)
-                if reviewer_name in user_exclude_list:
-                    continue
-                if review['state'] == 'CHANGES_REQUESTED':
-                    if reviewer_name not in commenters:
-                        commenters[reviewer_name] = 1
-                    else:
-                        commenters[reviewer_name] += 1
-
-        except requests.Timeout:
-            print(f"\tTimeout error: The request for {url} timed out")
-            continue  # to the next PR
-        except requests.exceptions.RequestException as e:
-            print(f"\tRequest error: {e} for {url}")
-            continue  # to the next PR
+                    commenters[reviewer_name] += 1
 
     if len(commenters) > 0:
         # convert commenters dictionary to list of dictionaries and sort by number of comments
@@ -250,7 +236,7 @@ def get_first_commit_date(repo_owner, repo_name, contributor_username):
 # This is missing PRs - check it for AP
 
 
-def get_prs_for_contributor(repo_owner: str, repo_name: str, contributor: str):
+def get_prs_for_contributor(repo_owner: str, repo_name: str, contributor: str) -> int:
     default_lookback = int(os.getenv('DEFAULT_MONTHS_LOOKBACK', 3))
     since_date = (datetime.now(
     ) - timedelta(weeks=default_lookback*4)).strftime('%Y-%m-%dT%H:%M:%SZ')
@@ -262,7 +248,7 @@ def get_prs_for_contributor(repo_owner: str, repo_name: str, contributor: str):
     if response is not None and 'total_count' in response:
         return response['total_count']
     else:
-        return None
+        return 0
 
 
 def get_workdays(start_date, end_date):
@@ -338,11 +324,6 @@ def curve_scores(df, scores_column_name, curved_score_column_name):
 
 
 def get_contributors_stats(repo_owner: str, repo_names: List[str], since_date: datetime) -> List[Tuple[str, str, str, float, float, float, float]]:
-    headers = {
-        "Authorization": f"Bearer {API_TOKEN}",
-        "Accept": "application/vnd.github+json",
-    }
-
     today: datetime = datetime.now().date()
     start_date: datetime = since_date
     end_date: datetime = pd.Timestamp.today()  # Seems redundant with today above
@@ -431,10 +412,9 @@ def get_contributors_stats(repo_owner: str, repo_names: List[str], since_date: d
                         contributor_stats["commits"] += weekly_stat["c"]
                         contributor_stats["changed_lines"] += weekly_stat.get(
                             "d", 0) + weekly_stat.get("a", 0)
-                prs_count = get_prs_for_contributor(
+                prs_count: int = get_prs_for_contributor(
                     repo_owner, repo_name, contributor_username)
-                if prs_count is not None:
-                    contributor_stats["prs"] += prs_count
+                contributor_stats["prs"] += prs_count
                 for dict_commenter_stats in list_dict_commenter_stats:
                     if dict_commenter_stats["commenter_name"] == contributor_username:
                         contributor_stats["review_comments"] += dict_commenter_stats["num_comments"]
@@ -515,32 +495,12 @@ def get_repos_by_topic(repo_owner, topic, topic_exclude, since_date_str):
         f'&per_page={MAX_ITEMS_PER_PAGE}'
     )
 
-    headers = {
-        "Accept": "application/vnd.github.v3+json",
-        "Authorization": f"Bearer {API_TOKEN}"
-    }
-
-    response = requests.get(url, headers=headers)
-    if response.status_code != 200:
-        if response.status_code == 422:  # Try again
-            for retry_attempt_delay in exponential_backoff_retry_delays:
-                retry_url = response.headers.get('Location')
-                # Wait for n seconds before checking the status
-                time.sleep(retry_attempt_delay)
-                retry_response_url: str = retry_url if retry_url else url
-                print(
-                    f"Retrying request for {retry_response_url} after {retry_attempt_delay} sec due to {response.status_code} response")
-                response = requests.get(
-                    retry_response_url, headers=headers)
-
-                # Check if the retry response is 200
-                if response.status_code == 200:
-                    break  # Exit the loop on successful response
+    response = github_request_exponential_backoff(url)
 
     item_list: {} = {}
     item_list_returned: [] = []
-    if response.status_code == 200:
-        item_list = response.json().get('items', [])
+    if response is not None:
+        item_list = response.get('items', [])
         for item in item_list:
             item_list_returned.append(item["name"])
         return item_list_returned
