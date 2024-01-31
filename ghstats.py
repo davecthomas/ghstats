@@ -13,6 +13,7 @@ import requests
 from scipy.stats import norm
 import itertools
 from dateutil.relativedelta import relativedelta
+from requests.models import Response
 
 
 GITHUB_API_BASE_URL = "https://api.github.com"
@@ -42,17 +43,29 @@ def sleep_until_ratelimit_reset_time(reset_epoch_time):
 
     # Check if the sleep time is negative, which can happen if the reset time has passed
     if time_diff.total_seconds() < 0:
-        print("No sleep required. The rate limit reset time has already passed.")
+        print("\tNo sleep required. The rate limit reset time has already passed.")
     else:
         time_diff = timedelta(seconds=int(time_diff.total_seconds()))
         # Print the sleep time using timedelta's string representation
-        print(f"Sleeping until rate limit reset: {time_diff}")
+        print(f"\tSleeping until rate limit reset: {time_diff}")
         time.sleep(time_diff.total_seconds())
     return
 
+# Check if we overran our rate limit. Take a short nap if so.
+# Return True if we overran
+
+
+def check_API_rate_limit(response: Response) -> bool:
+    if response.status_code == 403 and 'X-Ratelimit-Remaining' in response.headers:
+        if int(response.headers['X-Ratelimit-Remaining']) == 0:
+            print(
+                f"\t403 forbidden response header shows X-Ratelimit-Remaining at {response.headers['X-Ratelimit-Remaining']} requests.")
+            sleep_until_ratelimit_reset_time(
+                int(response.headers['X-RateLimit-Reset']))
+    return (response.status_code == 403 and 'X-Ratelimit-Remaining' in response.headers)
+
+
 # Retry backoff in 422, 202, or 403 (rate limit exceeded) responses
-
-
 def github_request_exponential_backoff(url):
     exponential_backoff_retry_delays_list: list[int] = [1, 2, 4, 8, 16, 32, 64]
     headers = {
@@ -60,16 +73,26 @@ def github_request_exponential_backoff(url):
         "Authorization": f"Bearer {API_TOKEN}"
     }
 
-    response = requests.get(url, headers=headers)
-    if response.status_code != 200:
+    retry: bool = False
+    response: Response = Response()
+    retry_url: str = None
+
+    try:
+        response = requests.get(url, headers=headers)
+    except requests.exceptions.Timeout:
+        print("Initial request timed out.")
+        retry = True
+
+    if retry or (response is not None and response.status_code != 200):
         if response.status_code == 422 and response.reason == "Unprocessable Entity":
             dict_error: Dict[str, any] = json.loads(response.text)
             print(
                 f"Skipping: {response.status_code} {response.reason} for url {url}\n\t{dict_error['message']}\n\t{dict_error['errors'][0]['message']}")
 
-        elif response.status_code == 202 or response.status_code == 403:  # Try again
+        elif retry or response.status_code == 202 or response.status_code == 403:  # Try again
             for retry_attempt_delay in exponential_backoff_retry_delays_list:
-                retry_url = response.headers.get('Location')
+                if 'Location' in response.headers:
+                    retry_url = response.headers.get('Location')
                 # The only time we override the exponential backoff if we are asked by Github to wait
                 if 'Retry-After' in response.headers:
                     retry_attempt_delay = response.headers.get('Retry-After')
@@ -78,16 +101,16 @@ def github_request_exponential_backoff(url):
                 retry_response_url: str = retry_url if retry_url else url
                 print(
                     f"Retrying request for {retry_response_url} after {retry_attempt_delay} sec due to {response.status_code} response")
-                if response.status_code == 403 and 'X-Ratelimit-Remaining' in response.headers:
-                    if int(response.headers['X-Ratelimit-Remaining']) == 0:
-                        print(
-                            f"403 forbidden response header shows X-Ratelimit-Remaining at {response.headers['X-Ratelimit-Remaining']} requests.")
-                        sleep_until_ratelimit_reset_time(
-                            int(response.headers['X-RateLimit-Reset']))
+                # A 403 may require us to take a nap
+                check_API_rate_limit(response)
 
-                response = requests.get(
-                    retry_response_url, headers=headers)
-
+                try:
+                    response = requests.get(
+                        retry_response_url, headers=headers)
+                except requests.exceptions.Timeout:
+                    print(
+                        f"Retry request timed out. retrying in {retry_attempt_delay} seconds.")
+                    continue
                 # Check if the retry response is 200
                 if response.status_code == 200:
                     break  # Exit the loop on successful response
@@ -99,6 +122,7 @@ def github_request_exponential_backoff(url):
         # print(f"Retry successful. Status code: {response.status_code}")
         return response.json()
     else:
+        check_API_rate_limit(response)
         print(
             f"Retries exhausted. Giving up. Status code: {response.status_code}")
         return None
@@ -181,7 +205,14 @@ def get_commenters_stats(repo_owner, repo_name, since_date: datetime):
 
         # Count CHANGES_REQUESTED reviews by the specified user
         for review in reviews:
-            reviewer_name: str = review['user']['login']
+            # Sometimes there is a None user, such as when a PR is closed on a user
+            # no longer with the organization. Wrap in try:except, swallow, continue...
+            try:
+                reviewer_name: str = review['user']['login']
+            except KeyError:
+                continue
+            except TypeError:
+                continue
             # skip those users we aren't tracking (typically bots)
             if reviewer_name in user_exclude_list:
                 continue
@@ -213,21 +244,18 @@ def get_first_commit_date(repo_owner, repo_name, contributor_username):
     Returns:
         str: The date of the first commit made by the contributor in the format "YYYY-MM-DD".
     """
-    headers = {
-        "Accept": "application/vnd.github.v3+json",
-        "Authorization": f"Bearer {API_TOKEN}"
-    }
-    response = requests.get(f"https://api.github.com/repos/{repo_owner}/{repo_name}/commits",
-                            params={"author": contributor_username, "per_page": MAX_ITEMS_PER_PAGE}, headers=headers)
-    response.raise_for_status()
 
-    commits = response.json()
+    url = f"https://api.github.com/repos/{repo_owner}/{repo_name}/commits?author={contributor_username}&per_page={MAX_ITEMS_PER_PAGE}"
 
-    if not commits:
+    commits = github_request_exponential_backoff(url)
+
+    # Check for empty results
+    if commits is None or (isinstance(commits, list) and len(commits)) == 0:
         print(
             f"\tNo commits found for contributor {contributor_username} in repository {repo_owner}/{repo_name}")
         return None
 
+    # Grab the last item in the list (the first time they committed)
     first_commit_date = commits[-1]["commit"]["author"]["date"][:10]
 
     return datetime.strptime(first_commit_date, '%Y-%m-%d')
@@ -262,6 +290,8 @@ def get_workdays(start_date, end_date):
 
     return weekdays
 
+# Not used. It's... meh
+
 
 def convert_to_letter_grade(score):
     grades = ['F', 'D', 'C', 'B', 'A']
@@ -280,6 +310,8 @@ def convert_to_letter_grade(score):
     letter_grade = grades[grade_idx] + modifiers[modifier_idx]
 
     return letter_grade
+
+# Take all the stats that will roll into a curved score and bucket by ntile
 
 
 def add_ntile_stats(df):
