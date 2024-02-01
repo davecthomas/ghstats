@@ -162,6 +162,8 @@ def get_commenters_stats(repo_owner, repo_name, since_date: datetime):
     today: datetime = datetime.now().date()
     start_date: datetime = since_date
     end_date: datetime = today + timedelta(days=1)
+    list_review_status_updates_we_track: List[str] = [
+        "APPROVED", "CHANGES_REQUESTED", "COMMENTED"]
 
     # get all pull requests for the repo within the lookback period
     base_pr_url: str = f"https://api.github.com/repos/{repo_owner}/{repo_name}/pulls"
@@ -194,7 +196,12 @@ def get_commenters_stats(repo_owner, repo_name, since_date: datetime):
         for comment in comments:
             if "user" not in comment:
                 continue
-            commenter_name = comment['user']['login']
+            try:
+                commenter_name = comment['user']['login']
+            except KeyError:
+                continue
+            except TypeError:
+                continue
             # skip those users we aren't tracking (typically bots)
             if commenter_name in user_exclude_list:
                 continue
@@ -216,7 +223,7 @@ def get_commenters_stats(repo_owner, repo_name, since_date: datetime):
             # skip those users we aren't tracking (typically bots)
             if reviewer_name in user_exclude_list:
                 continue
-            if review['state'] == 'CHANGES_REQUESTED':
+            if review['state'] in list_review_status_updates_we_track:
                 if reviewer_name not in commenters:
                     commenters[reviewer_name] = 1
                 else:
@@ -261,7 +268,7 @@ def get_first_commit_date(repo_owner, repo_name, contributor_username):
     return datetime.strptime(first_commit_date, '%Y-%m-%d')
 
 # Return a count of PRs for a contributor or None
-# This is missing PRs - check it for AP
+# TO DO - This is missing PRs, which is a serious problem.
 
 
 def get_prs_for_contributor(repo_owner: str, repo_name: str, contributor: str) -> int:
