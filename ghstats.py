@@ -14,6 +14,8 @@ from scipy.stats import norm
 import itertools
 from dateutil.relativedelta import relativedelta
 from requests.models import Response
+import snowflake.connector
+from snowflake.connector.pandas_tools import write_pandas
 
 # TO DO - database to time trend these metrics. One metric per month over 3 months.
 
@@ -271,7 +273,7 @@ def get_pr_stats(repo_owner, repo_name, since_date: datetime) -> Tuple[List[Dict
                     commenters[reviewer_name] += 1
 
     # Convert the dictionary of tuples to a list of dictionaries
-    contributors_list: List[Dict[str, any]]
+    contributors_list: List[Dict[str, any]] = []
     if len(contributors) > 0:
         contributors_list = [
             {'contributor_name': name, 'total_duration': duration, 'num_prs': prs}
@@ -613,13 +615,13 @@ def save_contributors_to_csv(contributors, filename):
         df = curve_scores(df, "avg_ntile", "curved_score")
         df.to_csv(filename, index=False)
         # Generate descriptive statistics
-        summary = df.describe(f"summary_{filename}")
+        summary = df.describe(df)
 
         # Calculate variance and add it to the summary
         # Pandas variance method defaults to unbiased variance (ddof=1), similar to R
         variance = df.var()
         summary.loc['var'] = variance
-        summary.to_csv()
+        summary.to_csv(f"summary_{filename}")
     else:
         print(f"\t No contributors for {filename}")
     return df
