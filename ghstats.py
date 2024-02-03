@@ -5,7 +5,7 @@ from datetime import datetime, timezone
 from datetime import timedelta, date
 import os
 import sys
-from typing import List, Tuple
+from typing import List, Tuple, Optional
 import pandas as pd
 import numpy as np
 import time
@@ -15,6 +15,7 @@ import itertools
 from dateutil.relativedelta import relativedelta
 from requests.models import Response
 
+# TO DO - database to time trend these metrics. One metric per month over 3 months.
 
 GITHUB_API_BASE_URL = "https://api.github.com"
 DEFAULT_MONTHS_LOOKBACK = int(os.getenv("DEFAULT_MONTHS_LOOKBACK", 0))
@@ -153,7 +154,22 @@ def get_github_collaborator_name(username):
         return None
 
 
-def get_commenters_stats(repo_owner, repo_name, since_date: datetime):
+def get_duration_in_days(open_date: str, close_date: str) -> float:
+    """
+    Returns the duration in fractions of days
+    Used to calculate how long a PR is open
+    """
+    opened = datetime.strptime(open_date, '%Y-%m-%dT%H:%M:%SZ')
+    closed = datetime.strptime(close_date, '%Y-%m-%dT%H:%M:%SZ')
+    duration_seconds = (closed - opened).total_seconds()
+    return duration_seconds / 86400  # Convert seconds to days as a float
+
+
+def get_pr_stats(repo_owner, repo_name, since_date: datetime) -> Tuple[List[Dict[str, any]], List[Dict[str, any]]]:
+    """
+    Returns all commenter stats and durations for all PRs in a repo
+    This is 2 lists of dictionaries returned as a tuple (commenters_stats, contributor_stats)
+    """
     # Exclude bot users who don't get measured
     user_exclude_env: str = os.getenv('USER_EXCLUDE', None)
     user_exclude_list = user_exclude_env.split(',') if user_exclude_env else []
@@ -176,8 +192,33 @@ def get_commenters_stats(repo_owner, repo_name, since_date: datetime):
         pull_requests = response
 
     # get all comments for each pull request and add up the number of comments per commenter
-    commenters = {}
+    # Also, get the duration of each PR
+    commenters: Dict[str, any] = {}
+    contributors: Dict[str, any] = {}
+
     for pr in pull_requests:
+        # First, get duration
+        duration_countable: bool = False
+        try:
+            contributor_name: str = pr['user']['login']
+        except KeyError:
+            continue
+        except TypeError:
+            continue
+        if 'merged_at' in pr and pr['merged_at']:
+            duration = get_duration_in_days(pr['created_at'], pr['merged_at'])
+            duration_countable = True
+        elif 'closed_at' in pr:
+            duration = get_duration_in_days(pr['created_at'], pr['closed_at'])
+            duration_countable = True
+        if duration_countable:
+            # Save a tuple of total duration, number of PRs (so we can average later)
+            if contributor_name not in contributors:
+                contributors[contributor_name] = (duration, 1)
+            else:
+                contributors[contributor_name] = contributors[contributor_name][0] + \
+                    duration, contributors[contributor_name][1]+1
+
         pr_url = pr['comments_url']
         comments = []
         reviews = []
@@ -229,6 +270,13 @@ def get_commenters_stats(repo_owner, repo_name, since_date: datetime):
                 else:
                     commenters[reviewer_name] += 1
 
+    # Convert the dictionary of tuples to a list of dictionaries
+    contributors_list: List[Dict[str, any]]
+    if len(contributors) > 0:
+        contributors_list = [
+            {'contributor_name': name, 'total_duration': duration, 'num_prs': prs}
+            for name, (duration, prs) in contributors.items()
+        ]
     if len(commenters) > 0:
         # convert commenters dictionary to list of dictionaries and sort by number of comments
         commenters_list = [{'commenter_name': k, 'num_comments': v}
@@ -236,7 +284,7 @@ def get_commenters_stats(repo_owner, repo_name, since_date: datetime):
         commenters_list = sorted(
             commenters_list, key=lambda x: x['num_comments'], reverse=True)
 
-    return commenters_list
+    return commenters_list, contributors_list
 
 
 def get_first_commit_date(repo_owner, repo_name, contributor_username):
@@ -268,7 +316,6 @@ def get_first_commit_date(repo_owner, repo_name, contributor_username):
     return datetime.strptime(first_commit_date, '%Y-%m-%d')
 
 # Return a count of PRs for a contributor or None
-# TO DO - This is missing PRs, which is a serious problem.
 
 
 def get_prs_for_contributor(repo_owner: str, repo_name: str, contributor: str) -> int:
@@ -369,12 +416,21 @@ def get_contributors_stats(repo_owner: str, repo_names: List[str], since_date: d
     contributors = []
     # {username: name} So we only call get_github_collaborator_name if we don't already have it
     dict_user_names = {}
+    # Average PR durations for a contributor. One avg per repo. A list across all repos.
+    # contributor_name: [list of averages]
+    dict_avg_durations: Dict[str, List[float]] = {}
 
     max_num_workdays = get_workdays(start_date, end_date)
     for repo_name in repo_names:
         print(f"\n{repo_owner}/{repo_name}")
-        list_dict_commenter_stats: list = get_commenters_stats(
+
+        # Get the PR reviewer activity and duration of PRs for each contributor to this repo
+        pr_stats_tuple: Tuple[List[Dict[str, any]], List[Dict[str, any]]] = get_pr_stats(
             repo_owner, repo_name, since_date)
+
+        # unpack the tuple into 2 list of dict - which we'll process in the user loop below
+        list_dict_commenter_stats, list_dict_pr_durations = pr_stats_tuple
+
         # Returns the total number of commits authored by the contributor. In addition, the response includes a Weekly Hash (weeks array) with the following information:
         # w - Start of the week, given as a Unix timestamp.
         # a - Number of additions
@@ -420,7 +476,7 @@ def get_contributors_stats(repo_owner: str, repo_names: List[str], since_date: d
                 if first_commit_date is not None and first_commit_date > start_date:
                     num_workdays = get_workdays(first_commit_date, end_date)
 
-                # TO DO: if the contributor username is already in the array, use the one with the earliest date
+                # If the contributor username is already in the array, use the one with the earliest date
                 # and add in the other stats to the existing stats
                 for contributor_stats_dict in contributors:
                     if contributor_stats_dict["contributor_name"] == contributor_name:
@@ -441,7 +497,9 @@ def get_contributors_stats(repo_owner: str, repo_names: List[str], since_date: d
                                          "stats_ending": today,
                                          "contributor_first_commit_date": first_commit_date,
                                          "num_workdays": num_workdays, "commits": 0, "prs": 0,
-                                         "review_comments": 0, "changed_lines": 0}
+                                         "review_comments": 0, "changed_lines": 0,
+                                         "avg_pr_duration": 0.0,
+                                         "avg_code_movement_per_pr": 0}
 
                 for weekly_stat in contributor["weeks"]:
                     weekly_date = datetime.utcfromtimestamp(
@@ -453,10 +511,28 @@ def get_contributors_stats(repo_owner: str, repo_names: List[str], since_date: d
                             "d", 0) + weekly_stat.get("a", 0)
                 prs_count: int = get_prs_for_contributor(
                     repo_owner, repo_name, contributor_username)
+
+                # Add PRs from get_pr_stats
                 contributor_stats["prs"] += prs_count
                 for dict_commenter_stats in list_dict_commenter_stats:
                     if dict_commenter_stats["commenter_name"] == contributor_username:
                         contributor_stats["review_comments"] += dict_commenter_stats["num_comments"]
+
+                # Add PR durations from get_pr_stats: this dictionary has 3 entries:
+                # contributor_name, total_duration, and num_prs. From this we can get an avg duration
+                for dict_pr_durations in list_dict_pr_durations:
+                    if dict_pr_durations["contributor_name"] == contributor_username:
+                        avg_duration = round(dict_pr_durations["total_duration"] /
+                                             dict_pr_durations["num_prs"], 3) if dict_pr_durations["num_prs"] != 0 else 0.0
+                        # add this avg duration to a dict with list of durations for this user, to be averaged later.
+                        if contributor_username not in dict_avg_durations:
+                            dict_avg_durations[contributor_name] = [
+                                avg_duration]
+                        else:
+                            dict_avg_durations[contributor_username].append(
+                                avg_duration)
+                        # to do - average the averages for this user across all repos...
+                        # We do this outside the outer repos loop
 
                 # Only save stats if there are stats to save
                 if contributor_stats["commits"] == 0 and contributor_stats["prs"] == 0 and contributor_stats["review_comments"] == 0 and contributor_stats["changed_lines"] == 0:
@@ -464,13 +540,15 @@ def get_contributors_stats(repo_owner: str, repo_names: List[str], since_date: d
 
                 # Normalize per workday in lookback period
                 else:
-
                     if contributor_stats["commits"] > 0:
                         contributor_stats["commits_per_day"] = round(
                             contributor_stats["commits"]/num_workdays, 3)
                     if contributor_stats["changed_lines"] > 0:
                         contributor_stats["changed_lines_per_day"] = round(
                             contributor_stats["changed_lines"]/num_workdays, 3)
+                        if contributor_stats["prs"] > 0:
+                            contributor_stats["avg_code_movement_per_pr"] = round(
+                                contributor_stats["changed_lines"]/contributor_stats["prs"], 3)
                     if contributor_stats["prs"] > 0:
                         contributor_stats["prs_per_day"] = round(
                             contributor_stats["prs"]/num_workdays, 3)
@@ -486,6 +564,19 @@ def get_contributors_stats(repo_owner: str, repo_names: List[str], since_date: d
             print(
                 f'\tNo contributors found for {repo_name} since {since_date}.')
             continue
+
+        # Generate a new dictionary with contributor_name to average duration
+        contributor_average_durations: Dict[str, float] = {
+            contributor: sum(durations) / len(durations) if durations else 0
+            for contributor, durations in dict_avg_durations.items()
+        }
+        # Merge this into contributors list of dict
+        for contributor in contributors:
+            contributor_name = contributor['contributor_name']
+            # Check if the user_name exists in the contributor_average_durations dictionary
+            if contributor_name in contributor_average_durations:
+                # Add a new key-value pair for the average duration
+                contributor['avg_pr_duration'] = contributor_average_durations[contributor_name]
 
     return contributors
 
@@ -511,6 +602,8 @@ def save_contributors_to_csv(contributors, filename):
         df["prs_per_day"] = df['prs_per_day'].fillna(0)
         df["review_comments_per_day"] = df['review_comments_per_day'].fillna(0)
         df["prs_per_day"] = df['prs_per_day'].fillna(0)
+        df["avg_code_movement_per_pr"] = df['avg_code_movement_per_pr'].fillna(
+            0)
         # Remove any rows where there are no commits and no PRs.
         # I'm seeing Github return PR comments from people who were not involved in the lookback
         # period. I haven't diagnosed this. This is a hacky way to get rid of them.
@@ -519,6 +612,14 @@ def save_contributors_to_csv(contributors, filename):
         df = add_ntile_stats(df)
         df = curve_scores(df, "avg_ntile", "curved_score")
         df.to_csv(filename, index=False)
+        # Generate descriptive statistics
+        summary = df.describe(f"summary_{filename}")
+
+        # Calculate variance and add it to the summary
+        # Pandas variance method defaults to unbiased variance (ddof=1), similar to R
+        variance = df.var()
+        summary.loc['var'] = variance
+        summary.to_csv()
     else:
         print(f"\t No contributors for {filename}")
     return df
