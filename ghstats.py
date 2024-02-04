@@ -20,7 +20,9 @@ from ghs_utils import *
 # Unused
 # from ghs_snowflake import *
 
-# TO DO - get a list of all contributors and store that in a global cache, so you
+# Go through json and use this approach to avoid key errors directly accessing json dict entries: pull_requests.get("items", [])
+# TO DO - BUG - each month shows the same num PR comments and PRs. Commits and LOC are ok.
+# TO DO - new column: difference from mean for prs
 # Don't have to re-query this for every month
 # To DO - add pagination to all requests!!
 # ^^ this is a prereq before you start to store timeseries data. ^^
@@ -158,9 +160,23 @@ def get_pr_stats(repo_owner, repo_name, since_date: datetime, until_date: dateti
     list_review_status_updates_we_track: List[str] = [
         "APPROVED", "CHANGES_REQUESTED", "COMMENTED"]
 
+    # TO DO - replace the below URL with a search query since /pulls doesn't filter by date!
     # get all pull requests for the repo within the lookback period
-    base_pr_url: str = f"https://api.github.com/repos/{repo_owner}/{repo_name}/pulls"
-    url = f"{base_pr_url}?state=closed&since={since_date}&until={until_date}&per_page={MAX_ITEMS_PER_PAGE}"
+    # base_pr_url: str = f"https://api.github.com/repos/{repo_owner}/{repo_name}/pulls"
+    # url = f"{base_pr_url}?state=closed&since={since_date}&until={until_date}&per_page={MAX_ITEMS_PER_PAGE}"
+
+    # Base URL for the Search API focusing on issues (which includes PRs)
+    base_search_url: str = "https://api.github.com/search/issues"
+
+    # Formulating the query part
+    query: str = f"repo:{repo_owner}/{repo_name}+is:pr+is:closed+\
+        created:{since_date.strftime('%Y-%m-%d')}..{until_date.strftime('%Y-%m-%d')}"
+
+    # Complete URL
+    url: str = f"{base_search_url}?q={query}&per_page={MAX_ITEMS_PER_PAGE}"
+
+    # used when we get reviews for each PR, in the PR loop
+    pr_reviews_base_url: str = f"https://api.github.com/repos/{repo_owner}/{repo_name}/pulls"
 
     pull_requests = []
 
@@ -173,7 +189,7 @@ def get_pr_stats(repo_owner, repo_name, since_date: datetime, until_date: dateti
     commenters: Dict[str, any] = {}
     contributors: Dict[str, any] = {}
 
-    for pr in pull_requests:
+    for pr in pull_requests.get("items", []):
         # First, get duration
         duration_countable: bool = False
         try:
@@ -182,11 +198,13 @@ def get_pr_stats(repo_owner, repo_name, since_date: datetime, until_date: dateti
             continue
         except TypeError:
             continue
-        if 'merged_at' in pr and pr['merged_at']:
-            duration = get_duration_in_days(pr['created_at'], pr['merged_at'])
+        merged_at: str = pr.get('merged_at')
+        closed_at: str = pr.get('closed_at')
+        if merged_at:
+            duration = get_duration_in_days(pr['created_at'], merged_at)
             duration_countable = True
-        elif 'closed_at' in pr:
-            duration = get_duration_in_days(pr['created_at'], pr['closed_at'])
+        elif closed_at:
+            duration = get_duration_in_days(pr['created_at'], closed_at)
             duration_countable = True
         if duration_countable:
             # Save a tuple of total duration, number of PRs (so we can average later)
@@ -196,37 +214,60 @@ def get_pr_stats(repo_owner, repo_name, since_date: datetime, until_date: dateti
                 contributors[contributor_name] = contributors[contributor_name][0] + \
                     duration, contributors[contributor_name][1]+1
 
-        # pr_url = pr['comments_url']
-        # comments = []
-        # # Get comments - Replaced this with the reviews query, which is better for statuses.
-        # comments_response = github_request_exponential_backoff(pr_url)
-        # if comments_response is not None:
-        #     comments = comments_response
-        # for comment in comments:
-        #     if "user" not in comment:
-        #         continue
-        #     try:
-        #         commenter_name = comment['user']['login']
-        #     except KeyError:
-        #         continue
-        #     except TypeError:
-        #         continue
-        #     # skip those users we aren't tracking (typically bots)
-        #     if commenter_name in user_exclude_list:
-        #         continue
-        #     if commenter_name not in commenters:
-        #         commenters[commenter_name] = 1
-        #     else:
-        #         commenters[commenter_name] += 1
+        """
+        Get reviews with changes requested using the pr_reviews_base_url + the pr number 
+        We want to count how many useful state responses each reviewer provides, 
+        since this is an indication of repo productivity. 
+        
+        Json response looks like this:
+        [
+            {
+                "id": 80,
+                "node_id": "MDE3OlB1bGxSZXF1ZXN0UmV2aWV3ODA=",
+                "user": {
+                "login": "octocat",
+                "name": "The Octocat"
+                "id": 1,
+                "avatar_url": "https://github.com/images/error/octocat_happy.gif",
+                ...
+                },
+                "body": "Here is the body for the review.",
+                "commit_id": "ecdd80bb57125d7ba9641ffaa4d7d2c19d3f3091",
+                "submitted_at": "2020-11-04T19:01:12Z",
+                "state": "APPROVED",
+                "html_url": "https://github.com/octocat/Hello-World/pull/42#pullrequestreview-80",
+                ...
+            },
+            {
+                "id": 81,
+                "node_id": "MDE3OlB1bGxSZXF1ZXN0UmV2aWV3ODE=",
+                "user": {
+                "login": "another_user",
+                ...
+                },
+                "body": "Changes requested.",
+                "commit_id": "ecdd80bb57125d7ba9641ffaa4d7d2c19d3f3091",
+                "submitted_at": "2020-11-05T15:00:00Z",
+                "state": "CHANGES_REQUESTED",
+                "html_url": "https://github.com/octocat/Hello-World/pull/42#pullrequestreview-81",
+                ...
+            }
+            ]
 
-        # Get reviews with changes requested
+        """
         reviews = []
-        reviews_url = f"{base_pr_url}/{pr['number']}/reviews"
-        review_response = github_request_exponential_backoff(reviews_url)
-        if review_response is not None:
-            reviews = review_response
 
-        # Count CHANGES_REQUESTED reviews by the specified user
+        pr_number = pr.get('number', None)
+        reviews_url = pr_number and f"{pr_reviews_base_url}/{pr_number}/reviews"
+        pr.get("review_comments_url", None)
+        reviews_response = reviews_url and github_request_exponential_backoff(
+            reviews_url)
+        if reviews_response is not None:
+            reviews = reviews_response
+
+        # Count state changes where the reviewer should get credit for their contribution
+        # TO DO: consider only providing credit for reviews with a "body" length < x,
+        # Since "LGTM" reviews are likely not contributing enough value to be counted.
         for review in reviews:
             # Sometimes there is a None user, such as when a PR is closed on a user
             # no longer with the organization. Wrap in try:except, swallow, continue...
@@ -236,10 +277,11 @@ def get_pr_stats(repo_owner, repo_name, since_date: datetime, until_date: dateti
                 continue
             except TypeError:
                 continue
-            # skip those users we aren't tracking (typically bots)
+            # skip those users we aren't tracking (typically GHA helper bots)
             if reviewer_name in user_exclude_list:
                 continue
-            if review['state'] in list_review_status_updates_we_track:
+            review_state: str = review.get("state", None)
+            if review_state in list_review_status_updates_we_track:
                 if reviewer_name not in commenters:
                     commenters[reviewer_name] = 1
                 else:
@@ -614,6 +656,9 @@ if __name__ == "__main__":
     repo_owner = os.getenv("REPO_OWNER")
     repo_names_env = os.getenv("REPO_NAMES")
     repo_names = repo_names_env.split(",") if repo_names_env else []
+    repo_names_exclude_env = os.getenv("REPO_NAMES_EXCLUDE")
+    repo_names_exclude = repo_names_exclude_env.split(
+        ",") if repo_names_exclude_env else []
     # For each month we look back, we need to collect a set of stats so we can get a time series
     months_lookback = int(os.getenv("DEFAULT_MONTHS_LOOKBACK", 3))
     topic_env = os.getenv("TOPIC")
@@ -636,6 +681,10 @@ if __name__ == "__main__":
     if len(repo_names) == 0 and topic_name is not None:
         repo_names = get_repos_by_topic(
             repo_owner, topic_name, topic_exclude_name, since_date_str, until_date_str)
+
+    # Filter out repos in exclude list
+    repo_names = [
+        item for item in repo_names if item not in repo_names_exclude]
 
     if len(repo_names) == 0 and topic_name is None:
         print(f'Either TOPIC or REPO_NAMES must be provided in .env')

@@ -98,4 +98,5 @@ def get_duration_in_days(open_date: str, close_date: str) -> float:
     opened = datetime.strptime(open_date, '%Y-%m-%dT%H:%M:%SZ')
     closed = datetime.strptime(close_date, '%Y-%m-%dT%H:%M:%SZ')
     duration_seconds = (closed - opened).total_seconds()
-    return duration_seconds / 86400  # Convert seconds to days as a float
+    # Convert seconds to days as a float
+    return round(duration_seconds / 86400, 3)
