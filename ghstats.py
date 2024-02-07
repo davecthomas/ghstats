@@ -13,24 +13,18 @@ from scipy.stats import norm
 import itertools
 from dateutil.relativedelta import relativedelta
 from requests.models import Response
+from ghs_snowflake import ContributorStatsStorageManager
 
 # The Zen of Python would rather I "import ghs_utils" and prefix all functions with ghs_utils.
 from ghs_utils import *
-
-# Unused
-# from ghs_snowflake import *
-
-# Don't have to re-query this for every month
-# To DO - update callers to exponential_backoff to process pages
-# ^^ this is a prereq before you start to store timeseries data. ^^
-# TO DO - database to time trend these metrics. One metric per month over 3 months.
 
 # Globals
 GITHUB_API_BASE_URL = "https://api.github.com"
 DEFAULT_MONTHS_LOOKBACK = int(os.getenv("DEFAULT_MONTHS_LOOKBACK", 0))
 API_TOKEN = os.getenv("GITHUB_API_TOKEN")
-MAX_ITEMS_PER_PAGE = int(os.getenv("MAX_ITEMS_PER_PAGE", 100))
+MAX_ITEMS_PER_PAGE = 100  # Limited by Github API
 MIN_WORKDAYS_AS_CONTRIBUTOR = int(os.getenv("MIN_WORKDAYS_AS_CONTRIBUTOR", 30))
+STATS_TABLE_NAME = "CONTRIBUTOR_STATS"
 
 # Our "cache" of contributors usernames username: Display name
 dict_user_names: Dict[str, str] = {}
@@ -208,7 +202,6 @@ def get_pr_stats(repo_owner, repo_name, since_date: datetime, until_date: dateti
     # Also, get the duration of each PR
     commenters: Dict[str, any] = {}
     contributors: Dict[str, any] = {}
-
     for pull_requests in pull_requests_pages:
         pull_requests_items: [] = pull_requests.get("items", [])
         for pr in pull_requests_items:
@@ -595,53 +588,6 @@ def get_contributors_stats(repo_owner: str, repo_names: List[str],
     return list_dict_contributor_stats
 
 
-def save_contributors_to_csv(list_dict_contributor_stats, filename):
-    df = None
-    if len(list_dict_contributor_stats) > 0:
-        # Clean up
-        df = pd.DataFrame(list_dict_contributor_stats)
-        df["commits_per_day"] = df['commits_per_day'].fillna(0)
-        df["changed_lines_per_day"] = df['changed_lines_per_day'].fillna(0)
-        df["prs_per_day"] = df['prs_per_day'].fillna(0)
-        df["review_comments_per_day"] = df['review_comments_per_day'].fillna(0)
-        df["prs_per_day"] = df['prs_per_day'].fillna(0)
-        df["avg_code_movement_per_pr"] = df['avg_code_movement_per_pr'].fillna(
-            0)
-
-        # Remove any rows where there are no commits and no PRs.
-        # I'm seeing Github return PR comments from people who were not involved in the lookback
-        # period. I haven't diagnosed this. This is a hacky way to get rid of them.
-        # Obvy, if PRs and commits are zero, so are changed_lines.
-        df = df[~((df['commits'] == 0) & (df['prs'] == 0))]
-
-        # Calculate the difference from the mean for each row in the 'pr' column
-        df['prs_diff_from_mean'] = df['prs'] - df['prs'].mean()
-
-        # Decile time!
-        df = add_ntile_stats(df)
-
-        # Create a curved score from 1-100 based on the average decile
-        df = curve_scores(df, "avg_ntile", "curved_score")
-
-        # Sort the DataFrame by 'curved_score' in descending order
-        df = df.sort_values(by='curved_score', ascending=False)
-
-        # TO DO - store in Snowflake here
-        #
-        # SNOWFLAKE STORAGE HERE
-        #
-
-        # Create a csv
-        df.to_csv(filename, index=False)
-
-        # Generate descriptive statistics
-        summary = df.describe()
-        summary.to_csv(f"summary_{filename}")
-    else:
-        print(f"\t No contributors for {filename}")
-    return df
-
-
 def get_repos_by_topic(repo_owner: str, topic: str, topic_exclude: str, since_date_str: str, until_date_str: str):
     """
     Get all the repos within the org that share the same topic, pushed to in the date range
@@ -666,6 +612,48 @@ def get_repos_by_topic(repo_owner: str, topic: str, topic_exclude: str, since_da
             for item in item_list:
                 item_list_returned.append(item["name"])
         return item_list_returned
+
+
+def prepare_for_storage(list_dict_contributor_stats: []) -> pd.DataFrame:
+    df = None
+    if len(list_dict_contributor_stats) > 0:
+        # Clean up
+        df = pd.DataFrame(list_dict_contributor_stats)
+        df["commits_per_day"] = df['commits_per_day'].fillna(0)
+        df["changed_lines_per_day"] = df['changed_lines_per_day'].fillna(0)
+        df["prs_per_day"] = df['prs_per_day'].fillna(0)
+        df["review_comments_per_day"] = df['review_comments_per_day'].fillna(0)
+        df["prs_per_day"] = df['prs_per_day'].fillna(0)
+        df["avg_code_movement_per_pr"] = df['avg_code_movement_per_pr'].fillna(
+            0)
+
+        # Remove any rows where there are no commits and no PRs.
+        # I'm seeing Github return PR comments from people who were not involved in the lookback
+        # period. I haven't diagnosed this. This is a hacky way to get rid of them.
+        # Obvy, if PRs and commits are zero, so are changed_lines.
+        df = df[~((df['commits'] == 0) & (df['prs'] == 0))]
+
+        # Calculate the difference from the mean for each row in the 'pr' column
+        df['prs_diff_from_mean'] = (df['prs'] - df['prs'].mean()).round(3)
+
+        # Decile time!
+        df = add_ntile_stats(df)
+
+        # Create a curved score from 1-100 based on the average decile
+        df = curve_scores(df, "avg_ntile", "curved_score")
+
+        # Sort the DataFrame by 'curved_score' in descending order
+        df = df.sort_values(by='curved_score', ascending=False)
+    else:
+        print(f"\t No contributors found")
+    return df
+
+
+def store_contributor_stats(df: pd.DataFrame, filename: str):
+    storage_manager = ContributorStatsStorageManager()
+    storage_manager.save_df_to_csv(df, filename)
+    storage_manager.save_summary_stats_csv(df, filename)
+    storage_manager.store_df_in_snowflake(df, STATS_TABLE_NAME)
 
 
 if __name__ == "__main__":
@@ -736,5 +724,7 @@ if __name__ == "__main__":
     date_string = datetime.now().strftime('%Y-%m-%d-%H%M')
     filename = truncate_filename(
         f'{date_string}-{months_lookback}months-{repo_owner}_{repo_names}')
-    df = save_contributors_to_csv(
-        list_dict_contributors_stats, f'contribs_{filename}.csv')
+    df = prepare_for_storage(
+        list_dict_contributors_stats)
+    if df is not None:
+        store_contributor_stats(f'contribs_{filename}.csv')
