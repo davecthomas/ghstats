@@ -40,6 +40,8 @@ storage_manager = ContributorStatsStorageManager()
 conn = storage_manager.get_snowflake_connection()
 # df: pd.DataFrame = storage_manager.run_select_query(
 #     "select * from CONTRIBUTOR_STATS")
-storage_manager.insert_list_dict(generate_data(
-    5), storage_manager.get_db_env().get("snowflake_table_name_staging", ""))
+# storage_manager.store_list_dict(generate_data(
+#     5), storage_manager.get_db_env().get("snowflake_table_name_staging", ""))
+storage_manager.upsert_dataframe(pd.DataFrame(generate_data(8)), storage_manager.get_db_env().get(
+    "snowflake_table_name", ""), storage_manager.get_db_env().get("snowflake_table_name_staging", ""))
 storage_manager.close_connection()

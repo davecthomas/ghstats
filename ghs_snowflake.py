@@ -73,15 +73,22 @@ class ContributorStatsStorageManager:
         summary = df.describe()
         summary.to_csv(f"summary_{filename}")
 
-    def store_df_in_snowflake(self, df: pd.DataFrame):
+    def store_df(self, df: pd.DataFrame, table_name: str):
         """Stores the DataFrame in a Snowflake table."""
         conn = self.get_snowflake_connection()
         # Assuming the Snowflake Connector for Python is already installed
         # and you have a DataFrame 'df' to upload.
         success, nchunks, nrows, _ = write_pandas(conn,
-                                                  df, self.dict_db_env["snowflake_table_name"].upper())
+                                                  df, table_name)
         print(
-            f"Data stored in Snowflake table {self.dict_db_env['snowflake_table_name']}: {nrows} rows in {nchunks} chunks.")
+            f"Data stored in Snowflake table {table_name}: {nrows} rows in {nchunks} chunks.")
+
+    def delete_all_rows(self, staging_table: str):
+        conn = self.get_snowflake_connection()
+        sql: str = f"""delete from "{staging_table}";"""
+        conn.cursor().execute(sql)
+        print("")
+        # conn.close()
 
     def upsert_dataframe(self, df: pd.DataFrame, target_table: str, staging_table: str):
         """
@@ -94,33 +101,86 @@ class ContributorStatsStorageManager:
         :param staging_table: Name of the staging table for initial DataFrame upload.
         """
         conn = self.get_snowflake_connection()
+        # Prereq: this assume staging table is clear!
+        self.delete_all_rows(staging_table)
 
         # Step 1: Upload DataFrame to a staging table
-        conn.write_pandas(conn, df, staging_table)
+        write_pandas(conn, df, staging_table)
 
         # Step 2: Merge from staging table to target table
         merge_sql = f"""
-        MERGE INTO {target_table} AS target
-        USING {staging_table} AS staging
-        ON target.username = staging.username
-        AND target.repo = staging.repo
-        AND target.stats_beginning = staging.stats_beginning
-        WHEN MATCHED THEN
-            UPDATE SET target.stats_ending = staging.stats_ending,
-                       target.num_workdays = staging.num_workdays,
-                       -- Add other columns as necessary
+        MERGE INTO "{target_table}" AS target
+        USING "{staging_table}" AS staging
+        ON target."contributor_username" = staging."contributor_username"
+        AND target."repo" = staging."repo"
+        AND target."stats_beginning" = staging."stats_beginning"
         WHEN NOT MATCHED THEN
-            INSERT (username, repo, stats_beginning, stats_ending, num_workdays, ...)
-            VALUES (staging.username, staging.repo, staging.stats_beginning, staging.stats_ending, staging.num_workdays, ...);
+            INSERT (
+                "repo",
+                "contributor_name",
+                "contributor_username",
+                "curved_score" ,
+                "stats_beginning" ,
+                "stats_ending" ,
+                "contributor_first_commit_date" ,
+                "num_workdays" ,
+                "commits",
+                "prs",
+                "review_comments",
+                "changed_lines",
+                "avg_pr_duration",
+                "avg_code_movement_per_pr" ,
+                "commits_per_day" ,
+                "changed_lines_per_day" ,
+                "prs_per_day" ,
+                "review_comments_per_day" ,
+                "prs_diff_from_mean" , 
+                "prs_ntile" ,
+                "commits_ntile" ,
+                "lines_of_code_ntile" ,
+                "review_comments_ntile" ,
+                "avg_pr_duration_ntile" ,
+                "avg_ntile" 
+            )
+            VALUES (
+                staging."repo",
+                staging."contributor_name",
+                staging."contributor_username",
+                staging."curved_score" ,
+                staging."stats_beginning" ,
+                staging."stats_ending" ,
+                staging."contributor_first_commit_date" ,
+                staging."num_workdays" ,
+                staging."commits",
+                staging."prs",
+                staging."review_comments",
+                staging."changed_lines",
+                staging."avg_pr_duration",
+                staging."avg_code_movement_per_pr" ,
+                staging."commits_per_day" ,
+                staging."changed_lines_per_day" ,
+                staging."prs_per_day" ,
+                staging."review_comments_per_day" ,
+                staging."prs_diff_from_mean" , 
+                staging."prs_ntile" ,
+                staging."commits_ntile" ,
+                staging."lines_of_code_ntile" ,
+                staging."review_comments_ntile" ,
+                staging."avg_pr_duration_ntile" ,
+                staging."avg_ntile"     
+            );
         """
 
-        # Execute the MERGE statement
-        conn.cursor().execute(merge_sql)
+        cursor = conn.cursor()
+        cursor.execute(merge_sql)
+        conn.commit()
+        rows_merged: int = cursor.rowcount
+        print(f"Merged {rows_merged} into {target_table}")
         conn.close()
 
-    def insert_list_dict(self, list_dict_test: List[Dict[str, any]], table_name: str):
+    def store_list_dict(self, list_dict_test: List[Dict[str, any]], table_name: str):
         """
-        Inserts a rows into the contributor_stats table using write_pandas.
+        Inserts a list of dict 
 
         """
         conn = self.get_snowflake_connection()
@@ -129,10 +189,4 @@ class ContributorStatsStorageManager:
         # Adjust the column names and dummy values according to your actual table schema
 
         df = pd.DataFrame(list_dict_test)
-
-        # Use the write_pandas method to insert the dummy data
-        success, nchunks, nrows, _ = write_pandas(conn, df, table_name)
-
-        print(f"Successfully inserted {nrows} dummy row(s) into {table_name}.")
-
-        conn.close()
+        self.store_df(df, table_name)
