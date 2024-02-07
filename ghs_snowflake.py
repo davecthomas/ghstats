@@ -1,12 +1,15 @@
 import os
 import pandas as pd
 import snowflake.connector
-from typing import Dict, Optional
+from typing import Dict, Optional, List
+from snowflake.connector.pandas_tools import write_pandas
 
 
 class ContributorStatsStorageManager:
     def __init__(self):
+        self.dict_db_env = None
         self.conn: Optional[snowflake.connector.SnowflakeConnection] = None
+        self.get_db_env()
 
     def __del__(self):
         """Destructor to ensure the Snowflake connection is closed."""
@@ -23,16 +26,18 @@ class ContributorStatsStorageManager:
 
     def get_db_env(self) -> Dict[str, str]:
         """Fetches database environment variables."""
-        dict_db_env = {
-            "snowflake_user": os.getenv("SNOWFLAKE_USER"),
-            "snowflake_password": os.getenv("SNOWFLAKE_PASSWORD"),
-            "snowflake_account": os.getenv("SNOWFLAKE_ACCOUNT"),
-            "snowflake_warehouse": os.getenv("SNOWFLAKE_WAREHOUSE"),
-            "snowflake_db": os.getenv("SNOWFLAKE_DB"),
-            "snowflake_schema": os.getenv("SNOWFLAKE_SCHEMA"),
-            "snowflake_table_name": os.getenv("SNOWFLAKE_TABLE_NAME")
-        }
-        return dict_db_env
+        if self.dict_db_env is None:
+            self.dict_db_env = {
+                "snowflake_user": os.getenv("SNOWFLAKE_USER"),
+                "snowflake_password": os.getenv("SNOWFLAKE_PASSWORD"),
+                "snowflake_account": os.getenv("SNOWFLAKE_ACCOUNT"),
+                "snowflake_warehouse": os.getenv("SNOWFLAKE_WAREHOUSE"),
+                "snowflake_db": os.getenv("SNOWFLAKE_DB"),
+                "snowflake_schema": os.getenv("SNOWFLAKE_SCHEMA"),
+                "snowflake_table_name_staging": os.getenv("SNOWFLAKE_TABLE_NAME_STAGING"),
+                "snowflake_table_name": os.getenv("SNOWFLAKE_TABLE_NAME")
+            }
+        return self.dict_db_env
 
     def get_snowflake_connection(self):
         """Establishes a connection to Snowflake."""
@@ -73,7 +78,61 @@ class ContributorStatsStorageManager:
         conn = self.get_snowflake_connection()
         # Assuming the Snowflake Connector for Python is already installed
         # and you have a DataFrame 'df' to upload.
-        success, nchunks, nrows, _ = conn.write_pandas(
-            df, self.dict_db_env["snowflake_table_name"].upper())
+        success, nchunks, nrows, _ = write_pandas(conn,
+                                                  df, self.dict_db_env["snowflake_table_name"].upper())
         print(
             f"Data stored in Snowflake table {self.dict_db_env['snowflake_table_name']}: {nrows} rows in {nchunks} chunks.")
+
+    def upsert_dataframe(self, df: pd.DataFrame, target_table: str, staging_table: str):
+        """
+        Upserts data from a DataFrame into the target table using a staging table.
+        This is to avoid us having duplicate records when we re-run similar timeframes for the same
+        repos. 
+
+        :param df: DataFrame to upsert.
+        :param target_table: Name of the target table for upsert.
+        :param staging_table: Name of the staging table for initial DataFrame upload.
+        """
+        conn = self.get_snowflake_connection()
+
+        # Step 1: Upload DataFrame to a staging table
+        conn.write_pandas(conn, df, staging_table)
+
+        # Step 2: Merge from staging table to target table
+        merge_sql = f"""
+        MERGE INTO {target_table} AS target
+        USING {staging_table} AS staging
+        ON target.username = staging.username
+        AND target.repo = staging.repo
+        AND target.stats_beginning = staging.stats_beginning
+        WHEN MATCHED THEN
+            UPDATE SET target.stats_ending = staging.stats_ending,
+                       target.num_workdays = staging.num_workdays,
+                       -- Add other columns as necessary
+        WHEN NOT MATCHED THEN
+            INSERT (username, repo, stats_beginning, stats_ending, num_workdays, ...)
+            VALUES (staging.username, staging.repo, staging.stats_beginning, staging.stats_ending, staging.num_workdays, ...);
+        """
+
+        # Execute the MERGE statement
+        conn.cursor().execute(merge_sql)
+        conn.close()
+
+    def insert_list_dict(self, list_dict_test: List[Dict[str, any]], table_name: str):
+        """
+        Inserts a rows into the contributor_stats table using write_pandas.
+
+        """
+        conn = self.get_snowflake_connection()
+
+        # Define a dummy row matching the contributor_stats table schema
+        # Adjust the column names and dummy values according to your actual table schema
+
+        df = pd.DataFrame(list_dict_test)
+
+        # Use the write_pandas method to insert the dummy data
+        success, nchunks, nrows, _ = write_pandas(conn, df, table_name)
+
+        print(f"Successfully inserted {nrows} dummy row(s) into {table_name}.")
+
+        conn.close()

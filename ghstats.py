@@ -18,6 +18,8 @@ from ghs_snowflake import ContributorStatsStorageManager
 # The Zen of Python would rather I "import ghs_utils" and prefix all functions with ghs_utils.
 from ghs_utils import *
 
+# TO DO - store the user attributes dict in the DB
+
 # Globals
 GITHUB_API_BASE_URL = "https://api.github.com"
 DEFAULT_MONTHS_LOOKBACK = int(os.getenv("DEFAULT_MONTHS_LOOKBACK", 0))
@@ -26,8 +28,10 @@ MAX_ITEMS_PER_PAGE = 100  # Limited by Github API
 MIN_WORKDAYS_AS_CONTRIBUTOR = int(os.getenv("MIN_WORKDAYS_AS_CONTRIBUTOR", 30))
 STATS_TABLE_NAME = "CONTRIBUTOR_STATS"
 
-# Our "cache" of contributors usernames username: Display name
-dict_user_names: Dict[str, str] = {}
+# Our "cache" of contributors basic attributes
+# {username: {"display_name": Display name, "node_id": node_id}}
+# Each dictionary entry is just a cache of what is returned from get_github_user_attributes
+gdict_user_attributes: Dict[str, Dict[str, str]] = {}
 
 
 def check_API_rate_limit(response: Response) -> bool:
@@ -136,27 +140,31 @@ def github_request_exponential_backoff(url: str, params: Dict[str, Any] = {}) ->
     return pages_list
 
 
-def get_github_collaborator_name(username):
+def get_github_user_attributes(username) -> dict:
     """
-    Returns the name of a collaborator on a GitHub repository, given their username.
+    get basic user attributes
 
     Parameters:
     owner (str): The username of the owner of the repository.
-    repo (str): The name of the repository.
-    username (str): The username of the collaborator whose name to retrieve.
-    access_token (str): A personal access token with appropriate permissions to access the collaborator's information.
 
-    Returns:
-    str: The name of the collaborator, or None if the collaborator is not found or there is an error retrieving their information.
+    Returns: a dict of 
+    {username: username, display_name: display_name, node_id: unique_anonymized_id}
     """
+    user_attributes: dict = {}
+    global gdict_user_attributes
+    if username in gdict_user_attributes:
+        return gdict_user_attributes[username]
+
     url = f"https://api.github.com/users/{username}"
 
     response = github_request_exponential_backoff(url)
 
     if response is not None and isinstance(response, List) and len(response) > 0:
         collaborator_info = response[0]
-        collaborator_name = collaborator_info.get('name', None)
-        return collaborator_name
+        user_attributes = {"username": username, "display_name": collaborator_info.get('name', None),
+                           "node_id": collaborator_info.get('node_id', None)}
+        gdict_user_attributes[username] = user_attributes
+        return user_attributes
     else:
         return None
 
@@ -400,7 +408,7 @@ def get_contributors_stats(repo_owner: str, repo_names: List[str],
     list_dict_contributor_stats: List[Dict[str, Any]] = []
 
     # {username: name} So we only call get_github_collaborator_name if we don't already have it
-    global dict_user_names
+    global gdict_user_attributes
     # Average PR durations for a contributor. One avg per repo. A list across all repos.
     # contributor_name: [list of averages]
     dict_avg_durations: Dict[str, List[float]] = {}
@@ -439,16 +447,13 @@ def get_contributors_stats(repo_owner: str, repo_names: List[str],
 
                     contributor_username = contributor.get(
                         "author", {}).get("login", "")
-                    # See if we have cached it to avoid unnecessary duplicate calls to GH
-                    if contributor_username not in dict_user_names:
-                        contributor_name = get_github_collaborator_name(
-                            contributor_username)
-                        dict_user_names[contributor_username] = contributor_name
-                    else:
-                        contributor_name = dict_user_names[contributor_username]
 
-                    if contributor_name is None:
-                        contributor_name = contributor_username
+                    user_attributes: dict = get_github_user_attributes(
+                        contributor_username)
+
+                    contributor_name = user_attributes.get(
+                        "display_name", contributor_username)
+
                     print(f"\t{contributor_name} ({contributor_username})")
                     first_commit_date = get_first_commit_date(
                         repo_owner, repo_name, contributor_username)
@@ -614,6 +619,24 @@ def get_repos_by_topic(repo_owner: str, topic: str, topic_exclude: str, since_da
         return item_list_returned
 
 
+def get_repo_topics(repo_owner: str, repo_names: list) -> dict:
+    """
+    Returns a dict of {repo_name: [list of topics], ...}
+    """
+    dict_repo_topics: dict = {}
+    url_base: str = f"https://api.github.com/repos/{repo_owner}"
+    for repo in repo_names:
+        url = f"{url_base}/{repo}/topics"
+        response = github_request_exponential_backoff(url)
+        if response is not None and isinstance(response, List) and len(response) > 0:
+            pages_list: List = response
+            for page in pages_list:
+                if "names" in page:
+                    dict_repo_topics[repo] = page.get("names", [])
+
+    return dict_repo_topics
+
+
 def prepare_for_storage(list_dict_contributor_stats: []) -> pd.DataFrame:
     df = None
     if len(list_dict_contributor_stats) > 0:
@@ -654,6 +677,7 @@ def store_contributor_stats(df: pd.DataFrame, filename: str):
     storage_manager.save_df_to_csv(df, filename)
     storage_manager.save_summary_stats_csv(df, filename)
     storage_manager.store_df_in_snowflake(df, STATS_TABLE_NAME)
+    storage_manager.close_connection()
 
 
 if __name__ == "__main__":
@@ -690,6 +714,8 @@ if __name__ == "__main__":
     # Filter out repos in exclude list
     repo_names = [
         item for item in repo_names if item not in repo_names_exclude]
+
+    dict_repo_topics: dict = get_repo_topics(repo_owner, repo_names)
 
     if len(repo_names) == 0 and topic_name is None:
         print(f'Either TOPIC or REPO_NAMES must be provided in .env')

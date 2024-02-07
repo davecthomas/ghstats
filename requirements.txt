@@ -7,6 +7,7 @@ autopep8==2.0.2
 certifi==2022.12.7
 cffi==1.15.1
 charset-normalizer==2.1.1
+cloudpickle==2.2.1
 cryptography==41.0.7
 Deprecated==1.2.13
 filelock==3.13.1
@@ -15,8 +16,9 @@ idna==3.4
 multidict==6.0.4
 numpy==1.24.2
 packaging==23.2
-pandas==2.0.0
+pandas==2.1.4
 platformdirs==3.11.0
+pyarrow==15.0.0
 pycodestyle==2.10.0
 pycparser==2.21
 PyJWT==2.6.0
@@ -25,10 +27,12 @@ pyOpenSSL==23.3.0
 python-dateutil==2.8.2
 python-dotenv==0.17.1
 pytz==2023.3
+PyYAML==6.0.1
 requests==2.28.2
 scipy==1.10.1
 six==1.16.0
 snowflake-connector-python==3.7.0
+snowflake-snowpark-python==1.12.0
 sortedcontainers==2.4.0
 tomli==2.0.1
 tomlkit==0.12.3
