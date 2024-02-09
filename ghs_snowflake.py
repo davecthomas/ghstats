@@ -1,3 +1,4 @@
+from typing import List, Dict
 import os
 import pandas as pd
 import snowflake.connector
@@ -5,7 +6,7 @@ from typing import Dict, Optional, List
 from snowflake.connector.pandas_tools import write_pandas
 
 
-class ContributorStatsStorageManager:
+class GhsSnowflakeStorageManager:
     def __init__(self):
         self.dict_db_env = None
         self.conn: Optional[snowflake.connector.SnowflakeConnection] = None
@@ -35,7 +36,8 @@ class ContributorStatsStorageManager:
                 "snowflake_db": os.getenv("SNOWFLAKE_DB"),
                 "snowflake_schema": os.getenv("SNOWFLAKE_SCHEMA"),
                 "snowflake_table_name_staging": os.getenv("SNOWFLAKE_TABLE_NAME_STAGING"),
-                "snowflake_table_name": os.getenv("SNOWFLAKE_TABLE_NAME")
+                "snowflake_table_name": os.getenv("SNOWFLAKE_TABLE_NAME"),
+                "snowflake_table_name_contributors": os.getenv("SNOWFLAKE_TABLE_NAME_CONTRIBUTORS")
             }
         return self.dict_db_env
 
@@ -190,3 +192,113 @@ class ContributorStatsStorageManager:
 
         df = pd.DataFrame(list_dict_test)
         self.store_df(df, table_name)
+
+    def fetch_existing_contributors(self) -> List[Dict[str, any]]:
+        """
+        Fetches existing records from the 'contributors' table.
+
+        Returns:
+            List of dictionaries where each dictionary represents a record from the 'contributors' table.
+        """
+        conn = self.get_snowflake_connection()
+        cursor = conn.cursor()
+
+        cursor.execute(
+            'SELECT "contributor_nodeid", "contributor_name", "contributor_username" FROM "contributors"')
+        existing_records = cursor.fetchall()
+
+        # Convert query results to a list of dictionaries
+        existing_contributors = [
+            {"contributor_nodeid": nodeid, "contributor_name": name,
+                "contributor_username": username}
+            for nodeid, name, username in existing_records
+        ]
+
+        cursor.close()
+        conn.close()
+
+        return existing_contributors
+
+    def fetch_existing_contributors(self) -> List[Dict[str, any]]:
+        """
+        Fetches existing records from the 'contributors' table.
+
+        Returns:
+            List of dictionaries where each dictionary represents a record from the 'contributors' table.
+        """
+        conn = self.get_snowflake_connection()
+        cursor = conn.cursor()
+
+        cursor.execute(
+            'SELECT "contributor_nodeid", "contributor_name", "contributor_username" FROM "contributors"')
+        existing_records = cursor.fetchall()
+
+        # Convert query results to a list of dictionaries
+        existing_contributors = [
+            {"contributor_nodeid": nodeid, "contributor_name": name,
+                "contributor_username": username}
+            for nodeid, name, username in existing_records
+        ]
+
+        cursor.close()
+        conn.close()
+
+        return existing_contributors
+
+    def insert_new_contributors(self, df: pd.DataFrame) -> int:
+        """
+        Inserts new records into the 'contributors' table from a DataFrame, excluding existing records.
+
+        Parameters:
+            df (pd.DataFrame): DataFrame containing the contributors data.
+        Returns: 
+            count of inserted rows
+        """
+        # Fetch existing contributors
+        existing_contributors = self.fetch_existing_contributors()
+        existing_nodeids = {contributor['contributor_nodeid']
+                            for contributor in existing_contributors}
+
+        # Establish connection to Snowflake
+        conn = self.get_snowflake_connection()
+        cursor = conn.cursor()
+        count: int = 0
+
+        for index, row in df.iterrows():
+            # Check if the record exists
+            if row['contributor_nodeid'] not in existing_nodeids:
+                count += 1
+                # Insert new record
+                cursor.execute("""
+                    INSERT INTO "contributors" ("contributor_nodeid", "contributor_name", "contributor_username")
+                    VALUES (%s, %s, %s)
+                """, (row['contributor_nodeid'], row['contributor_name'], row['contributor_username']))
+
+        # Commit the transaction
+        conn.commit()
+
+        # Cleanup
+        cursor.close()
+        conn.close()
+
+        print(f"{count} contributors saved.")
+        return (count)
+
+    def upsert_contributors(self, df: pd.DataFrame):
+        # Fetch existing contributors and convert to a DataFrame
+        existing_contributors_list = self.fetch_existing_contributors()
+        existing_contributors_df = pd.DataFrame(existing_contributors_list)
+
+        # Assume new_contributors_df is your DataFrame containing new contributor records
+        # new_contributors_df would typically be prepared separately with data you wish to insert
+
+        # Identify new records by checking if 'contributor_nodeid' exists in the existing_contributors_df
+        new_records_df = df[~df['contributor_nodeid'].isin(
+            existing_contributors_df['contributor_nodeid'])]
+
+        # Insert new contributors
+        count: int = 0
+        if not new_records_df.empty:
+            count = self.insert_new_contributors(new_records_df)
+
+        return

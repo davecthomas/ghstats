@@ -13,7 +13,7 @@ from scipy.stats import norm
 import itertools
 from dateutil.relativedelta import relativedelta
 from requests.models import Response
-from ghs_snowflake import ContributorStatsStorageManager
+from ghs_snowflake import GhsSnowflakeStorageManager
 
 # The Zen of Python would rather I "import ghs_utils" and prefix all functions with ghs_utils.
 from ghs_utils import *
@@ -148,7 +148,7 @@ def get_github_user_attributes(username) -> dict:
     owner (str): The username of the owner of the repository.
 
     Returns: a dict of 
-    {username: username, display_name: display_name, node_id: unique_anonymized_id}
+    {contributor_username: str, contributor_name: str, contributor_nodeid: str}
     """
     user_attributes: dict = {}
     global gdict_user_attributes
@@ -161,8 +161,8 @@ def get_github_user_attributes(username) -> dict:
 
     if response is not None and isinstance(response, List) and len(response) > 0:
         collaborator_info = response[0]
-        user_attributes = {"username": username, "display_name": collaborator_info.get('name', None),
-                           "node_id": collaborator_info.get('node_id', None)}
+        user_attributes = {"contributor_username": username, "contributor_name": collaborator_info.get('name', None),
+                           "contributor_nodeid": collaborator_info.get('node_id', None)}
         gdict_user_attributes[username] = user_attributes
         return user_attributes
     else:
@@ -452,7 +452,7 @@ def get_contributors_stats(repo_owner: str, repo_names: List[str],
                         contributor_username)
 
                     contributor_name = user_attributes.get(
-                        "display_name", contributor_username)
+                        "contributor_name", contributor_username)
 
                     print(f"\t{contributor_name} ({contributor_username})")
                     first_commit_date = get_first_commit_date(
@@ -494,6 +494,7 @@ def get_contributors_stats(repo_owner: str, repo_names: List[str],
                     # if this is the first time we've seen this contributor, init a dict
                     if contributor_stats is None:
                         contributor_stats = {"repo": repo_name, "contributor_name": contributor_name,
+                                             "contributor_nodeid":  user_attributes.get("contributor_nodeid", ""),
                                              "contributor_username":  contributor_username,
                                              "stats_beginning": since_date,
                                              "stats_ending": until_date,
@@ -672,11 +673,25 @@ def prepare_for_storage(list_dict_contributor_stats: []) -> pd.DataFrame:
     return df
 
 
+def store_users(storage_manager: GhsSnowflakeStorageManager):
+    df = pd.DataFrame(list(gdict_user_attributes.values()))
+    storage_manager.upsert_contributors(df)
+
+
 def store_contributor_stats(df: pd.DataFrame, filename: str):
-    storage_manager = ContributorStatsStorageManager()
+    storage_manager: GhsSnowflakeStorageManager = GhsSnowflakeStorageManager()
+    store_users(storage_manager)
     storage_manager.save_df_to_csv(df, filename)
     storage_manager.save_summary_stats_csv(df, filename)
-    storage_manager.store_df_in_snowflake(df, STATS_TABLE_NAME)
+    """
+    This upsert does the following:
+    Clears out the staging table
+    Dumps the dataframe to the staging table
+    Merges the staging table contents to the main table (prevents dupes)
+    """
+    storage_manager.upsert_dataframe(df, storage_manager.get_db_env().get(
+        "snowflake_table_name", ""), storage_manager.get_db_env().get("snowflake_table_name_staging", ""))
+
     storage_manager.close_connection()
 
 

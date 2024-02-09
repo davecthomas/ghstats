@@ -1,6 +1,6 @@
 # ghstats
 
-Grab statistics from GitHub for a set of repos for a given organization and save them to csv.
+Grab statistics from GitHub for a set of repos for a given organization and save them to csv and Snowflake, if configured.
 
 ## Overview
 

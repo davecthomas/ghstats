@@ -7,6 +7,7 @@
 -- used to optimize query plans, even though the uniqueness of primary key values is not enforced.
 CREATE TABLE "contributor_stats" (
     "repo" VARCHAR(255),
+    "contributor_nodeid" VARCHAR(255),
     "contributor_name" VARCHAR(255),
     "contributor_username" VARCHAR(255),
     "curved_score" FLOAT,
@@ -31,7 +32,7 @@ CREATE TABLE "contributor_stats" (
     "review_comments_ntile" INT,
     "avg_pr_duration_ntile" INT,
     "avg_ntile" INT,
-    PRIMARY KEY ("contributor_username", "repo", "stats_beginning")
+    PRIMARY KEY ("contributor_nodeid", "repo", "stats_beginning")
 );
 
 
@@ -42,6 +43,7 @@ CREATE TABLE "contributor_stats" (
 -- the contributor_stats table
 CREATE TABLE "contributor_stats_staging" (
     "repo" VARCHAR(255),
+    "contributor_nodeid" VARCHAR(255),
     "contributor_name" VARCHAR(255),
     "contributor_username" VARCHAR(255),
     "curved_score" FLOAT,
@@ -66,5 +68,12 @@ CREATE TABLE "contributor_stats_staging" (
     "review_comments_ntile" INT,
     "avg_pr_duration_ntile" INT,
     "avg_ntile" INT,
-    PRIMARY KEY ("contributor_username", "repo", "stats_beginning")
+    PRIMARY KEY ("contributor_nodeid", "repo", "stats_beginning")
+);
+
+CREATE TABLE "contributors" (
+    "contributor_nodeid" VARCHAR(255),
+    "contributor_name" VARCHAR(255),
+    "contributor_username" VARCHAR(255),
+    PRIMARY KEY ("contributor_nodeid")
 );
