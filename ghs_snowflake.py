@@ -111,66 +111,73 @@ class GhsSnowflakeStorageManager:
 
         # Step 2: Merge from staging table to target table
         merge_sql = f"""
-        MERGE INTO "{target_table}" AS target
-        USING "{staging_table}" AS staging
-        ON target."contributor_username" = staging."contributor_username"
-        AND target."repo" = staging."repo"
-        AND target."stats_beginning" = staging."stats_beginning"
-        WHEN NOT MATCHED THEN
-            INSERT (
-                "repo",
-                "contributor_name",
-                "contributor_username",
-                "curved_score" ,
-                "stats_beginning" ,
-                "stats_ending" ,
-                "contributor_first_commit_date" ,
-                "num_workdays" ,
-                "commits",
-                "prs",
-                "review_comments",
-                "changed_lines",
-                "avg_pr_duration",
-                "avg_code_movement_per_pr" ,
-                "commits_per_day" ,
-                "changed_lines_per_day" ,
-                "prs_per_day" ,
-                "review_comments_per_day" ,
-                "prs_diff_from_mean" , 
-                "prs_ntile" ,
-                "commits_ntile" ,
-                "lines_of_code_ntile" ,
-                "review_comments_ntile" ,
-                "avg_pr_duration_ntile" ,
-                "avg_ntile" 
-            )
-            VALUES (
-                staging."repo",
-                staging."contributor_name",
-                staging."contributor_username",
-                staging."curved_score" ,
-                staging."stats_beginning" ,
-                staging."stats_ending" ,
-                staging."contributor_first_commit_date" ,
-                staging."num_workdays" ,
-                staging."commits",
-                staging."prs",
-                staging."review_comments",
-                staging."changed_lines",
-                staging."avg_pr_duration",
-                staging."avg_code_movement_per_pr" ,
-                staging."commits_per_day" ,
-                staging."changed_lines_per_day" ,
-                staging."prs_per_day" ,
-                staging."review_comments_per_day" ,
-                staging."prs_diff_from_mean" , 
-                staging."prs_ntile" ,
-                staging."commits_ntile" ,
-                staging."lines_of_code_ntile" ,
-                staging."review_comments_ntile" ,
-                staging."avg_pr_duration_ntile" ,
-                staging."avg_ntile"     
-            );
+                INSERT INTO "{target_table}" (
+                    "repo",
+                    "contributor_nodeid",
+                    "contributor_name",
+                    "contributor_username",
+                    "curved_score",
+                    "stats_beginning",
+                    "stats_ending",
+                    "contributor_first_commit_date",
+                    "num_workdays",
+                    "commits",
+                    "prs",
+                    "review_comments",
+                    "changed_lines",
+                    "avg_pr_duration",
+                    "avg_code_movement_per_pr",
+                    "commits_per_day",
+                    "changed_lines_per_day",
+                    "prs_per_day",
+                    "review_comments_per_day",
+                    "prs_diff_from_mean",
+                    "prs_ntile",
+                    "commits_ntile",
+                    "lines_of_code_ntile",
+                    "review_comments_ntile",
+                    "avg_pr_duration_ntile",
+                    "avg_ntile"
+                )
+                SELECT
+                    staging."repo",
+                    staging."contributor_nodeid",
+                    staging."contributor_name",
+                    staging."contributor_username",
+                    staging."curved_score",
+                    staging."stats_beginning",
+                    staging."stats_ending",
+                    staging."contributor_first_commit_date",
+                    staging."num_workdays",
+                    staging."commits",
+                    staging."prs",
+                    staging."review_comments",
+                    staging."changed_lines",
+                    staging."avg_pr_duration",
+                    staging."avg_code_movement_per_pr",
+                    staging."commits_per_day",
+                    staging."changed_lines_per_day",
+                    staging."prs_per_day",
+                    staging."review_comments_per_day",
+                    staging."prs_diff_from_mean",
+                    staging."prs_ntile",
+                    staging."commits_ntile",
+                    staging."lines_of_code_ntile",
+                    staging."review_comments_ntile",
+                    staging."avg_pr_duration_ntile",
+                    staging."avg_ntile"
+                FROM
+                    "{staging_table}" AS staging
+                LEFT JOIN
+                    "{target_table}" AS existing
+                ON
+                    staging."contributor_name" = existing."contributor_name"
+                    AND staging."repo" = existing."repo"
+                    AND staging."stats_beginning" = existing."stats_beginning"
+                WHERE
+                    existing."contributor_name" IS NULL;
+
+
         """
 
         cursor = conn.cursor()
@@ -284,21 +291,24 @@ class GhsSnowflakeStorageManager:
         print(f"{count} contributors saved.")
         return (count)
 
-    def upsert_contributors(self, df: pd.DataFrame):
+    def upsert_contributors(self, df: pd.DataFrame) -> None:
         # Fetch existing contributors and convert to a DataFrame
-        existing_contributors_list = self.fetch_existing_contributors()
-        existing_contributors_df = pd.DataFrame(existing_contributors_list)
+        existing_contributors_list: [] = self.fetch_existing_contributors()
+        if len(existing_contributors_list) == 0:
+            self.store_df(df, self.get_db_env().get(
+                "snowflake_table_name_contributors", ""))
 
-        # Assume new_contributors_df is your DataFrame containing new contributor records
-        # new_contributors_df would typically be prepared separately with data you wish to insert
+        else:
+            existing_contributors_df: pd.DataFrame = pd.DataFrame(
+                existing_contributors_list)
 
-        # Identify new records by checking if 'contributor_nodeid' exists in the existing_contributors_df
-        new_records_df = df[~df['contributor_nodeid'].isin(
-            existing_contributors_df['contributor_nodeid'])]
+            # Remove records we already have
+            new_records_df = df[~df['contributor_nodeid'].isin(
+                existing_contributors_df['contributor_nodeid'])]
 
-        # Insert new contributors
-        count: int = 0
-        if not new_records_df.empty:
-            count = self.insert_new_contributors(new_records_df)
+            # Insert new contributors
+            count: int = 0
+            if not new_records_df.empty:
+                count = self.insert_new_contributors(new_records_df)
 
         return

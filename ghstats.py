@@ -161,7 +161,10 @@ def get_github_user_attributes(username) -> dict:
 
     if response is not None and isinstance(response, List) and len(response) > 0:
         collaborator_info = response[0]
-        user_attributes = {"contributor_username": username, "contributor_name": collaborator_info.get('name', None),
+        display_name: str = collaborator_info.get('name', username)
+        if display_name is None:
+            display_name = username
+        user_attributes = {"contributor_username": username, "contributor_name": display_name,
                            "contributor_nodeid": collaborator_info.get('node_id', None)}
         gdict_user_attributes[username] = user_attributes
         return user_attributes
@@ -594,7 +597,7 @@ def get_contributors_stats(repo_owner: str, repo_names: List[str],
     return list_dict_contributor_stats
 
 
-def get_repos_by_topic(repo_owner: str, topic: str, topic_exclude: str, since_date_str: str, until_date_str: str):
+def get_repos_by_topic(repo_owner: str, topic: str, topic_exclude: str, since_date_str: str, until_date_str: str) -> list:
     """
     Get all the repos within the org that share the same topic, pushed to in the date range
     Optionally excluding a topic 
@@ -643,6 +646,13 @@ def prepare_for_storage(list_dict_contributor_stats: []) -> pd.DataFrame:
     if len(list_dict_contributor_stats) > 0:
         # Clean up
         df = pd.DataFrame(list_dict_contributor_stats)
+        df['stats_beginning'] = df['stats_beginning'].dt.strftime(
+            '%Y-%m-%d %H:%M:%S')
+        df['stats_ending'] = df['stats_ending'].dt.strftime(
+            '%Y-%m-%d %H:%M:%S')
+        df['contributor_first_commit_date'] = df['contributor_first_commit_date'].dt.strftime(
+            '%Y-%m-%d %H:%M:%S')
+
         df["commits_per_day"] = df['commits_per_day'].fillna(0)
         df["changed_lines_per_day"] = df['changed_lines_per_day'].fillna(0)
         df["prs_per_day"] = df['prs_per_day'].fillna(0)
@@ -673,14 +683,15 @@ def prepare_for_storage(list_dict_contributor_stats: []) -> pd.DataFrame:
     return df
 
 
-def store_users(storage_manager: GhsSnowflakeStorageManager):
+def store_contributors(storage_manager: GhsSnowflakeStorageManager) -> None:
     df = pd.DataFrame(list(gdict_user_attributes.values()))
     storage_manager.upsert_contributors(df)
+    return
 
 
-def store_contributor_stats(df: pd.DataFrame, filename: str):
+def store_contributor_stats(df: pd.DataFrame, filename: str) -> None:
     storage_manager: GhsSnowflakeStorageManager = GhsSnowflakeStorageManager()
-    store_users(storage_manager)
+    store_contributors(storage_manager)
     storage_manager.save_df_to_csv(df, filename)
     storage_manager.save_summary_stats_csv(df, filename)
     """
@@ -693,6 +704,7 @@ def store_contributor_stats(df: pd.DataFrame, filename: str):
         "snowflake_table_name", ""), storage_manager.get_db_env().get("snowflake_table_name_staging", ""))
 
     storage_manager.close_connection()
+    return
 
 
 if __name__ == "__main__":
@@ -762,10 +774,10 @@ if __name__ == "__main__":
         # Update until_date for the next iteration to step back another month
         current_until_date = since_date
 
-    date_string = datetime.now().strftime('%Y-%m-%d-%H%M')
-    filename = truncate_filename(
+    date_string: str = datetime.now().strftime('%Y-%m-%d-%H%M')
+    filename: str = truncate_filename(
         f'{date_string}-{months_lookback}months-{repo_owner}_{repo_names}')
-    df = prepare_for_storage(
+    df: pd.DataFrame = prepare_for_storage(
         list_dict_contributors_stats)
     if df is not None:
-        store_contributor_stats(f'contribs_{filename}.csv')
+        store_contributor_stats(df, f'contribs_{filename}.csv')
