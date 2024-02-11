@@ -8,18 +8,19 @@ from dateutil.relativedelta import relativedelta
 from requests.models import Response
 
 
-def get_workdays(start_date: datetime, end_date: datetime):
+def get_workdays(start_date: date, end_date: date) -> int:
     """
     Assuming people only code on weekdays -- Which isn't a great assumption...
     But anyway, all _per_day stats are actually "per workday"
     """
     weekdays = 0
     delta = timedelta(days=1)
+    start_date_loop: date = start_date
 
-    while start_date <= end_date:
-        if start_date.weekday() < 5:
+    while start_date_loop <= end_date:
+        if start_date_loop.weekday() < 5:
             weekdays += 1
-        start_date += delta
+        start_date_loop += delta
 
     return weekdays
 
@@ -58,9 +59,9 @@ def truncate_filename(repos):
     return repos
 
 
-def get_date_months_ago(months_ago) -> datetime:
-    current_date = datetime.now()
-    date_months_ago = current_date - relativedelta(months=months_ago)
+def get_date_months_ago(months_ago) -> date:
+    current_date = date.today()
+    date_months_ago: date = current_date - relativedelta(months=months_ago)
     return date_months_ago
 
 
@@ -94,6 +95,7 @@ def get_duration_in_days(open_date: str, close_date: str) -> float:
     """
     Returns the duration in fractions of days
     Used to calculate how long a PR is open
+    We don't store the datetime object, but we do use it for partial date math
     """
     opened = datetime.strptime(open_date, '%Y-%m-%dT%H:%M:%SZ')
     closed = datetime.strptime(close_date, '%Y-%m-%dT%H:%M:%SZ')

@@ -11,9 +11,9 @@ CREATE TABLE "contributor_stats" (
     "contributor_name" VARCHAR(255),
     "contributor_username" VARCHAR(255),
     "curved_score" FLOAT,
-    "stats_beginning" TIMESTAMP,
-    "stats_ending" TIMESTAMP,
-    "contributor_first_commit_date" TIMESTAMP,
+    "stats_beginning" DATE,
+    "stats_ending" DATE,
+    "contributor_first_commit_date" DATE,
     "num_workdays" INT,
     "commits" INT,
     "prs" INT,
@@ -47,9 +47,9 @@ CREATE TABLE "contributor_stats_staging" (
     "contributor_name" VARCHAR(255),
     "contributor_username" VARCHAR(255),
     "curved_score" FLOAT,
-    "stats_beginning" TIMESTAMP,
-    "stats_ending" TIMESTAMP,
-    "contributor_first_commit_date" TIMESTAMP,
+    "stats_beginning" DATE,
+    "stats_ending" DATE,
+    "contributor_first_commit_date" DATE,
     "num_workdays" INT,
     "commits" INT,
     "prs" INT,
@@ -76,4 +76,11 @@ CREATE TABLE "contributors" (
     "contributor_name" VARCHAR(255),
     "contributor_username" VARCHAR(255),
     PRIMARY KEY ("contributor_nodeid")
+);
+
+-- A repo can have multiple topics. A topic can belong to multiple repos.  
+CREATE TABLE "repo_topics" (
+    "repo_name" VARCHAR(255),
+    "repo_topic" VARCHAR(255),
+    PRIMARY KEY ("repo_name", "repo_topic") 
 );

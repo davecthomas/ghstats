@@ -55,6 +55,81 @@ class GhsSnowflakeStorageManager:
             )
         return self.conn
 
+    def fetch_existing_repo_topics(self) -> List[Dict[str, any]]:
+        """
+        Fetches existing records from the 'repo_topics' table.
+
+        Returns:
+            List of dictionaries where each dictionary represents a record from the 'repo_topics' table.
+        """
+        conn = self.get_snowflake_connection()
+        cursor = conn.cursor()
+
+        cursor.execute(
+            'SELECT "repo_name", "topic" FROM "repo_topics"')
+        existing_records = cursor.fetchall()
+
+        # Convert query results to a list of dictionaries
+        existing_repo_topics: list = [
+            {"repo_name": repo_name, "topic": topic}
+            for repo_name, topic in existing_records
+        ]
+
+        cursor.close()
+        conn.close()
+
+        return existing_repo_topics
+
+    def repo_topic_dict_to_dataframe(self, source_dict: Dict[str, List[str]]) -> pd.DataFrame:
+        """Converts a dictionary to a pandas DataFrame."""
+        # Flatten the dictionary into a list of dictionaries for easy DataFrame conversion
+        data = [{"repo_name": repo_name, "repo_topic": topic}
+                for repo_name, topics in source_dict.items()
+                for topic in topics]
+        df = pd.DataFrame(data)
+        return df
+
+    def store_repo_topics(self, dict_repo_topics: dict) -> int:
+        """
+        Inserts new records into the 'repo-topics' table from a DataFrame, excluding existing records.
+
+        Parameters:
+            df (pd.DataFrame): DataFrame containing the repo-topics data.
+        Returns: 
+            count of inserted rows
+        """
+        df: pd.DataFrame = self.repo_topic_dict_to_dataframe(dict_repo_topics)
+
+        # Query to check existence of a row
+        check_query = """
+        SELECT COUNT(*) FROM "repo_topics"
+        WHERE "repo_name" = %s AND "repo_topic" = %s;
+        """
+
+        # Insert query
+        insert_query = """
+        INSERT INTO "repo_topics" ("repo_name", "repo_topic")
+        VALUES (%s, %s);
+        """
+        conn = self.get_snowflake_connection()
+        cursor = conn.cursor()
+        for _, row in df.iterrows():
+            # Check if the row already exists
+            cursor.execute(check_query, (row['repo_name'], row['repo_topic']))
+            result = cursor.fetchone()
+            if result[0] == 0:  # If the row does not exist
+                # Insert the new row
+                cursor.execute(
+                    insert_query, (row['repo_name'], row['repo_topic']))
+                print(f"Inserted: {row['repo_name']}, {row['repo_topic']}")
+
+        # Commit transactions
+        conn.commit()
+
+        # Close connection
+        cursor.close()
+        conn.close()
+
     def run_select_query(self, query: str) -> pd.DataFrame:
         """Executes a SELECT query and returns the results as a pandas DataFrame."""
         conn = self.get_snowflake_connection()
