@@ -102,3 +102,10 @@ def get_duration_in_days(open_date: str, close_date: str) -> float:
     duration_seconds = (closed - opened).total_seconds()
     # Convert seconds to days as a float
     return round(duration_seconds / 86400, 3)
+
+
+def get_end_of_last_complete_month() -> date:
+    today: date = date.today()
+    first_of_this_month: date = today.replace(day=1)
+    last_day_of_last_month: date = first_of_this_month - timedelta(days=1)
+    return last_day_of_last_month

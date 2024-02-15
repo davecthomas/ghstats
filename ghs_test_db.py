@@ -3,6 +3,8 @@ from ghs_snowflake import GhsSnowflakeStorageManager
 
 import pandas as pd
 
+from ghstats import GhsGithub
+
 
 def generate_data(num_rows: int) -> list:
     list_to_generate: list = []
@@ -64,12 +66,54 @@ def generate_test_data_contributors(num_rows: int) -> pd.DataFrame:
     return df
 
 
-storage_manager = GhsSnowflakeStorageManager()
-conn = storage_manager.get_snowflake_connection()
-test_data_contributors_df: pd.DataFrame = generate_test_data_contributors(20)
+# def update_contributors(storage_manager: GhsSnowflakeStorageManager, repo_owner: str, repo_name: str):
+#     conn = storage_manager.get_snowflake_connection()
+#     cur = conn.cursor()
+
+#     # Retrieve all contributors
+#     try:
+#         cur.execute(
+#             f"""SELECT "contributor_username" FROM "contributors"; """)
+#         contributors = cur.fetchall()
+
+#         updated_records = 0
+
+#         # Iterate through each contributor and update the first_contribution_date
+#         for contributor in contributors:
+#             first_commit_date = get_first_commit_date(
+#                 repo_owner, repo_name, contributor[0])
+#             # Update the record in the contributors table with this date
+#             update_query = """
+#             UPDATE "contributors"
+#             SET "first_contribution_date" = %s
+#             WHERE "contributor_username" = %s
+#             """
+#             cur.execute(update_query, (first_commit_date,
+#                         contributor[0]))
+#             updated_records += cur.rowcount
+
+#         # Commit the transaction
+#         conn.commit()
+
+#         return updated_records
+
+#     except Exception as e:
+#         print(f"An error occurred: {e}")
+#         return 0
+#     finally:
+#         cur.close()
+#         conn.close()
+
+
+# storage_manager = GhsSnowflakeStorageManager()
+# conn = storage_manager.get_snowflake_connection()
+# updated_count = update_contributors(storage_manager,
+#                                     "upside-services", "ios-ui")
+# print(f"Updated records: {updated_count}")
+# test_data_contributors_df: pd.DataFrame = generate_test_data_contributors(20)
 # storage_manager.store_df(test_data_contributors_df, storage_manager.get_db_env(
 # ).get("snowflake_table_name_contributors", ""))
-storage_manager.upsert_contributors(test_data_contributors_df)
+# storage_manager.upsert_contributors(test_data_contributors_df)
 # df: pd.DataFrame = storage_manager.run_select_query(
 #     "select * from CONTRIBUTOR_STATS")
 # storage_manager.store_list_dict(generate_data(
@@ -77,4 +121,7 @@ storage_manager.upsert_contributors(test_data_contributors_df)
 # storage_manager.upsert_dataframe(pd.DataFrame(generate_data(8)), storage_manager.get_db_env().get(
 #     "snowflake_table_name", ""), storage_manager.get_db_env().get("snowflake_table_name_staging", ""))
 
-storage_manager.close_connection()
+ghs: GhsGithub = GhsGithub()
+ghs.retrieve_and_store_org_repos()
+
+# storage_manager.close_connection()

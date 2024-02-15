@@ -1,4 +1,4 @@
-from typing import List, Dict
+from typing import List, Dict, Set, Tuple
 import os
 import pandas as pd
 import snowflake.connector
@@ -54,6 +54,9 @@ class GhsSnowflakeStorageManager:
                 schema=dict_db_env["snowflake_schema"]
             )
         return self.conn
+
+    def store_dataframe(df: pd.DataFrame, table_name: str):
+        pass
 
     def fetch_existing_repo_topics(self) -> List[Dict[str, any]]:
         """
@@ -387,3 +390,53 @@ class GhsSnowflakeStorageManager:
                 count = self.insert_new_contributors(new_records_df)
 
         return
+
+    def get_existing_repo_topics(self) -> Set[Tuple[str, str]]:
+        """
+        Retrieves all existing repo topics from Snowflake.
+
+        Returns:
+            A set of tuples, each containing (repo_name, repo_topic).
+        """
+        query = """SELECT "repo_name", "repo_topic" FROM "repo_topics";"""
+        existing_topics: Set[Tuple[str, str]] = set()
+        conn = self.get_snowflake_connection()
+        try:
+            cursor = conn.cursor()
+            cursor.execute(query)
+            for row in cursor.fetchall():
+                # Adding a tuple of repo_name and repo_topic
+                existing_topics.add((row[0], row[1]))
+        finally:
+            cursor.close()
+            conn.close()
+        return existing_topics
+
+    def insert_new_repo_topics(self, new_topics_df: pd.DataFrame) -> None:
+        """
+        Inserts new repo topics into Snowflake, avoiding duplicates.
+
+        Args:
+            new_topics_df (pd.DataFrame): DataFrame containing new repo topics with columns 'repo_name' and 'repo_topic'.
+        """
+        existing_topics: Set[Tuple[str, str]] = self.get_existing_repo_topics(
+        )  # Retrieve existing topics
+        new_records: List[Tuple[str, str]] = []
+        inserted: int = 0
+
+        for index, row in new_topics_df.iterrows():
+            if (row['repo_name'], row['repo_topic']) not in existing_topics:
+                new_records.append((row['repo_name'], row['repo_topic']))
+
+        # Convert new records to DataFrame for insertion
+        if new_records:
+            df_insert: pd.DataFrame = pd.DataFrame(
+                new_records, columns=['repo_name', 'repo_topic'])
+            conn = self.get_snowflake_connection()
+            try:
+                write_pandas(conn, df_insert, 'repo_topics')
+                inserted = len(df_insert)
+                # print(f"Inserted {len(df_insert)} new repo topics.")
+            finally:
+                conn.close()
+        return inserted
