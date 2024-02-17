@@ -230,18 +230,19 @@ class GhsGithub:
         # used when we get reviews for each PR, in the PR loop
         pr_reviews_base_url: str = f"https://api.github.com/repos/{repo_owner}/{repo_name}/pulls"
 
-        pull_requests = []
+        pull_requests: list = []
+        pull_requests_pages: list = []
 
         response = self.github_request_exponential_backoff(url)
         if response is not None and isinstance(response, List) and len(response) > 0:
-            pull_requests_pages: List = response
+            pull_requests_pages = response
 
         # get all comments for each pull request and add up the number of comments per commenter
         # Also, get the duration of each PR
         commenters: Dict[str, any] = {}
         contributors: Dict[str, any] = {}
         for pull_requests in pull_requests_pages:
-            pull_requests_items: [] = pull_requests.get("items", [])
+            pull_requests_items: list = pull_requests.get("items", [])
             for pr in pull_requests_items:
                 # First, get duration
                 duration_countable: bool = False
@@ -481,7 +482,7 @@ class GhsGithub:
                         "contributor_name", contributor_username)
 
                     print(
-                        f"\t{repo_name}: {contributor_name} ({contributor_username})")
+                        f'\t{repo_name}: {contributor_name} ({contributor_username}) from {since_date.strftime("%Y-%m-%d")} to {until_date.strftime("%Y-%m-%d")}')
                     first_commit_date = self.get_first_commit_date(
                         env_dict["repo_owner"], repo_name, contributor_username)
                     num_workdays = max_num_workdays
@@ -532,8 +533,8 @@ class GhsGithub:
                                              "avg_code_movement_per_pr": 0}
 
                     # Get a list of contributions per week. If they are in the time window, accumulate.
-                    contributor_weekly_contribs_list: [
-                    ] = contributor.get("weeks", [])
+                    contributor_weekly_contribs_list: list = contributor.get(
+                        "weeks", [])
                     for weekly_stat in contributor_weekly_contribs_list:
                         weekly_stat_utc: int = weekly_stat.get("w", None)
                         weekly_date: date = weekly_stat_utc and datetime.utcfromtimestamp(
@@ -635,8 +636,8 @@ class GhsGithub:
 
         response = self.github_request_exponential_backoff(url)
 
-        item_list: {} = {}
-        item_list_returned: [] = []
+        item_list: Dict = {}
+        item_list_returned: list = []
         if response is not None and isinstance(response, List) and len(response) > 0:
             pages_list: List = response
             for page in pages_list:
@@ -662,7 +663,7 @@ class GhsGithub:
 
         return dict_repo_topics
 
-    def prepare_for_storage(self, list_dict_contributor_stats: []) -> pd.DataFrame:
+    def prepare_for_storage(self, list_dict_contributor_stats: list) -> pd.DataFrame:
         df: pd.DataFrame = pd.DataFrame()
         if len(list_dict_contributor_stats) > 0:
             # Clean up
@@ -731,14 +732,16 @@ class GhsGithub:
         if dict_env is None:
             print(f"Missing env vars - README")
             return
+
+        repo_names: str = dict_env["repo_names"]
+
         since_date: date = get_date_months_ago(dict_env["months_lookback"])
         since_date_str: str = since_date.strftime('%Y-%m-%d')
-        until_date = get_end_of_last_complete_month()
-        until_date_str: str = until_date.strftime('%Y-%m-%d')
-        repo_names: str = dict_env["repo_names"]
 
         # If there were no repo_names in .env, we can pull the repos based on the topic
         if len(repo_names) == 0 and dict_env["topic_name"] is not None:
+            until_date = get_end_of_last_complete_month()
+            until_date_str: str = until_date.strftime('%Y-%m-%d')
             repo_names = self.get_repos_by_topic(
                 dict_env["repo_owner"], dict_env["topic_name"], dict_env["topic_exclude_name"], since_date_str, until_date_str)
 
@@ -755,7 +758,8 @@ class GhsGithub:
             sys.exit()
 
         # Tell the user what they're getting
-        print(f'Stats for {dict_env["repo_owner"]} repos:')
+        print(
+            f'Stats for {len(repo_names)} {dict_env["repo_owner"]} repos since {since_date_str}:')
         print(f', '.join(repo_names))
         # END - TO DO move into the loop section below
 
@@ -764,15 +768,18 @@ class GhsGithub:
         # Initialize contributor_stats as an empty dictionary. Then add to it each iteration
         list_dict_contributors_stats: List[Dict[str, Any]] = []
 
-        # Initialize until_date to the last day of the last complete month (which is only today if today is the last day)
-        current_until_date: date = get_end_of_last_complete_month()
-
         for repo in repo_names:
+            # Initialize until_date to the last day of the last complete month (which is only today if today is the last day)
+            current_until_date: date = get_end_of_last_complete_month()
+            since_date: date = get_date_months_ago(dict_env["months_lookback"])
+            since_date_str: str = since_date.strftime('%Y-%m-%d')
+            until_date = get_end_of_last_complete_month()
+            until_date_str: str = until_date.strftime('%Y-%m-%d')
             for month_delta in range(1, dict_env["months_lookback"] + 1):
                 # Calculate the start (since_date) of the month period
                 since_date = current_until_date - relativedelta(months=1)
                 print(
-                    f'\n{month_delta}: Getting stats for {dict_env["repo_owner"]} from {since_date.strftime("%Y-%m-%d")} to {current_until_date.strftime("%Y-%m-%d")}')
+                    f'\nGetting stats for {dict_env["repo_owner"]} from {since_date.strftime("%Y-%m-%d")} to {current_until_date.strftime("%Y-%m-%d")}')
                 current_period_contributors_stats: List[Dict[str, Any]] = []
                 current_period_contributors_stats = self.get_contributors_stats(
                     dict_env, repo, since_date, current_until_date)
@@ -786,6 +793,8 @@ class GhsGithub:
             df: pd.DataFrame = self.prepare_for_storage(
                 list_dict_contributors_stats)
             if df is not None:
+                print(
+                    f"\tRetrieved stats for {len(df)} contributors. Merging them.")
                 self.store_contributor_stats(df)
 
     def retrieve_and_store_org_repos(self):

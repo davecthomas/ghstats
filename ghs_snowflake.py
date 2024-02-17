@@ -185,6 +185,8 @@ class GhsSnowflakeStorageManager:
         self.delete_all_rows(staging_table)
 
         # Step 1: Upload DataFrame to a staging table
+        # Avoid a warning due to a non-standard index in the dataframe
+        df.reset_index(drop=True, inplace=True)
         write_pandas(conn, df, staging_table)
 
         # Step 2: Merge from staging table to target table
@@ -262,7 +264,8 @@ class GhsSnowflakeStorageManager:
         cursor.execute(merge_sql)
         conn.commit()
         rows_merged: int = cursor.rowcount
-        print(f"Merged {rows_merged} into {target_table}")
+        print(
+            f"Stored {rows_merged} into {target_table} of {len(df)} potential rows.")
         conn.close()
 
     def store_list_dict(self, list_dict_test: List[Dict[str, any]], table_name: str):
