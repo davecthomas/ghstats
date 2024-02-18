@@ -394,27 +394,24 @@ class GhsGithub:
         # df['grade'] = df['avg_ntile'].apply(convert_to_letter_grade)
         return df
 
-    def curve_scores(self, df, scores_column_name, curved_score_column_name):
-        """
-        Still not sure if this matters much, but we're using it for now
-        """
-        # Calculate the mean and standard deviation of the scores
+    def curve_scores(self, df: pd.DataFrame, scores_column_name: str, curved_score_column_name: str) -> pd.DataFrame:
+        # Handle cases where standard deviation is zero or there are NaN values
         mean = df[scores_column_name].mean()
         std_dev = df[scores_column_name].std()
 
-        # Calculate the Z-scores for each score
-        z_scores = (df[scores_column_name] - mean) / std_dev
+        if std_dev > 0:
+            # Calculate Z-scores
+            z_scores = (df[scores_column_name] - mean) / std_dev
+            # Calculate CDF values using the Z-scores
+            norm_dist = norm(0, 1)
+            cdf = norm_dist.cdf(z_scores)
+            # Safely convert CDF values to a 0-100 scale and round to integer
+            curved_scores = np.nan_to_num(cdf * 100).round().astype(int)
+        else:
+            # Assign a default score or handle the case as appropriate
+            curved_scores = np.zeros(len(df))
 
-        # Create a normal distribution with mean 0 and standard deviation 1
-        norm_dist = norm(0, 1)
-
-        # Calculate the cumulative distribution function (CDF) for each Z-score
-        cdf = norm_dist.cdf(z_scores)
-
-        # Map the CDF values to a 0-100 range
-        curved_scores = (cdf * 100).round().astype(int)
-
-        # Update the DataFrame with the curved scores, near left side since this is important data
+        # Update the DataFrame
         df.insert(3, curved_score_column_name, curved_scores)
 
         return df
