@@ -672,9 +672,11 @@ class GhsGithub:
             df["commits_per_day"] = df['commits_per_day'].fillna(0)
             df["changed_lines_per_day"] = df['changed_lines_per_day'].fillna(0)
             df["prs_per_day"] = df['prs_per_day'].fillna(0)
+            if "review_comments_per_day" not in df:
+                df["review_comments_per_day"] = 0
             df["review_comments_per_day"] = df['review_comments_per_day'].fillna(
                 0)
-            df["prs_per_day"] = df['prs_per_day'].fillna(0)
+            df["avg_pr_duration"] = df['avg_pr_duration'].fillna(0)
             df["avg_code_movement_per_pr"] = df['avg_code_movement_per_pr'].fillna(
                 0)
 
