@@ -792,7 +792,7 @@ class GhsGithub:
             # Store this repo data for the whole sequence of months
             df: pd.DataFrame = self.prepare_for_storage(
                 list_dict_contributors_stats)
-            if df is not None:
+            if df is not None and len(df) > 0:
                 print(
                     f"\tRetrieved stats for {len(df)} contributors. Merging them.")
                 self.store_contributor_stats(df)

@@ -170,7 +170,7 @@ class GhsSnowflakeStorageManager:
         print("")
         # conn.close()
 
-    def upsert_dataframe(self, df: pd.DataFrame, target_table: str, staging_table: str):
+    def upsert_dataframe(self, df: pd.DataFrame, target_table: str, staging_table: str) -> int:
         """
         Upserts data from a DataFrame into the target table using a staging table.
         This is to avoid us having duplicate records when we re-run similar timeframes for the same
@@ -179,7 +179,11 @@ class GhsSnowflakeStorageManager:
         :param df: DataFrame to upsert.
         :param target_table: Name of the target table for upsert.
         :param staging_table: Name of the staging table for initial DataFrame upload.
+        :return: Number of rows merged into the target table or None on error.
         """
+        if df.empty:
+            print("DataFrame is empty. Skipping upsert.")
+            return None
         conn = self.get_snowflake_connection()
         # Prereq: this assume staging table is clear!
         self.delete_all_rows(staging_table)
@@ -267,6 +271,7 @@ class GhsSnowflakeStorageManager:
         print(
             f"Stored {rows_merged} into {target_table} of {len(df)} potential rows.")
         conn.close()
+        return rows_merged
 
     def store_list_dict(self, list_dict_test: List[Dict[str, any]], table_name: str):
         """
