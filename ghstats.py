@@ -789,8 +789,6 @@ class GhsGithub:
             print(f"Missing env vars - README")
             return
 
-        repo_names: str = self.dict_env["repo_names"]
-
         since_date: date = get_date_months_ago(
             self.dict_env["months_lookback"])
         since_date_str: str = since_date.strftime('%Y-%m-%d')
@@ -798,31 +796,32 @@ class GhsGithub:
         # Get the topics for all the repos. Need this now because we accept "all" as a topic, below
         # We stash the dict of repo_topics in the settings for use later
         dict_repo_topics: dict = self.get_repo_topics(
-            self.dict_env["repo_owner"], repo_names)
+            self.dict_env["repo_owner"], self.dict_env["repo_names"])
         if len(dict_repo_topics) > 0:
             self.dict_env["dict_all_repo_topics"] = dict_repo_topics.copy()
             self.store_repo_topics(dict_repo_topics)
 
         # If there were no repo_names in .env, we can pull the repos based on the topic (which can be "all")
-        if len(repo_names) == 0 and self.dict_env["topic_name"] is not None:
+        if len(self.dict_env["repo_names"]) == 0 and self.dict_env["topic_name"] is not None:
             until_date = get_end_of_last_complete_month()
             until_date_str: str = until_date.strftime('%Y-%m-%d')
-            repo_names = self.get_repos_by_topic(
+            self.dict_env["repo_names"] = self.get_repos_by_topic(
                 self.dict_env["repo_owner"], self.dict_env["topic_name"], self.dict_env["topic_exclude_name"], since_date_str, until_date_str)
 
         # Filter out repos in exclude list
-        repo_names = [
-            item for item in repo_names if item not in self.dict_env["repo_names_exclude"]]
+        self.dict_env["repo_names"] = [
+            item for item in self.dict_env["repo_names"] if item not in self.dict_env["repo_names_exclude"]]
 
-        if len(repo_names) == 0 and self.dict_env["topic_name"] is None:
+        if len(self.dict_env["repo_names"]) == 0 and self.dict_env["topic_name"] is None:
             print(f'Either TOPIC or REPO_NAMES must be provided in .env')
             sys.exit()
 
         # Tell the user what they're getting
         print(
-            f'Stats for {len(repo_names)} {self.dict_env["repo_owner"]} repos since {since_date_str}:')
-        if (len(repo_names) < MAX_REPO_NAMES_TO_PRINT):  # Don't print out too many
-            print(f', '.join(repo_names))
+            f'Stats for {len(self.dict_env["repo_names"])} {self.dict_env["repo_owner"]} repos since {since_date_str}:')
+        # Don't print out too many
+        if (len(self.dict_env["repo_names"]) < MAX_REPO_NAMES_TO_PRINT):
+            print(f', '.join(self.dict_env["repo_names"]))
         else:
             print(
                 f"Too many repos to list (more than {MAX_REPO_NAMES_TO_PRINT}).")
@@ -833,7 +832,7 @@ class GhsGithub:
         # Initialize contributor_stats as an empty dictionary. Then add to it each iteration
         list_dict_contributors_stats: List[Dict[str, Any]] = []
 
-        for repo in repo_names:
+        for repo in self.dict_env["repo_names"]:
             # Initialize until_date to the last day of the last complete month (which is only today if today is the last day)
             current_until_date: date = get_end_of_last_complete_month()
             since_date: date = get_date_months_ago(
