@@ -116,6 +116,7 @@ class GhsSnowflakeStorageManager:
         """
         conn = self.get_snowflake_connection()
         cursor = conn.cursor()
+        rows_merged: int = 0
         for _, row in df.iterrows():
             # Check if the row already exists
             cursor.execute(check_query, (row['repo_name'], row['repo_topic']))
@@ -124,7 +125,8 @@ class GhsSnowflakeStorageManager:
                 # Insert the new row
                 cursor.execute(
                     insert_query, (row['repo_name'], row['repo_topic']))
-                print(f"Inserted: {row['repo_name']}, {row['repo_topic']}")
+                rows_merged += 1
+                # print(f"Inserted: {row['repo_name']}, {row['repo_topic']}")
 
         # Commit transactions
         conn.commit()
@@ -132,6 +134,8 @@ class GhsSnowflakeStorageManager:
         # Close connection
         cursor.close()
         conn.close()
+        print(f"Inserted {rows_merged} repo topics.")
+        return rows_merged
 
     def run_select_query(self, query: str) -> pd.DataFrame:
         """Executes a SELECT query and returns the results as a pandas DataFrame."""
@@ -269,7 +273,7 @@ class GhsSnowflakeStorageManager:
         conn.commit()
         rows_merged: int = cursor.rowcount
         print(
-            f"Stored {rows_merged} into {target_table} of {len(df)} potential rows.")
+            f"\tStored {rows_merged} into {target_table} of {len(df)} potential rows.")
         conn.close()
         return rows_merged
 

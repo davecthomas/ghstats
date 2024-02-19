@@ -24,6 +24,7 @@ API_TOKEN = os.getenv("GITHUB_API_TOKEN")
 MAX_ITEMS_PER_PAGE = 100  # Limited by Github API
 MIN_WORKDAYS_AS_CONTRIBUTOR = int(os.getenv("MIN_WORKDAYS_AS_CONTRIBUTOR", 30))
 STATS_TABLE_NAME = "CONTRIBUTOR_STATS"
+MAX_REPO_NAMES_TO_PRINT = 20  # Limit the number of repo names we print out in the log
 
 # Our "cache" of contributors basic attributes
 # {username: {"display_name": Display name, "node_id": node_id}}
@@ -41,7 +42,9 @@ class GhsGithub:
         Get env values
         Returns None if anything is missing, else returns a dict of settings
         """
-        dict_env: dict = {}
+        dict_env: dict = {"repo_owner": None, "repo_names": [], "repo_names_exclude": [],
+                          "months_lookback": DEFAULT_MONTHS_LOOKBACK, "topic_name": None, "topic_exclude_name": None,
+                          "dict_all_repo_topics": {}}
         # Get the env settings
         dict_env["repo_owner"] = os.getenv("REPO_OWNER", None)
         # Optional env var
@@ -57,7 +60,7 @@ class GhsGithub:
             os.getenv("DEFAULT_MONTHS_LOOKBACK", 3))
         if dict_env["months_lookback"] < 1:
             dict_env["months_lookback"] = 3
-        # Optional env var
+        # Optional env var, which can be "all" to get all repo topics (thus all repos with topics) in the org
         topic_env = os.getenv("TOPIC")
         dict_env["topic_name"] = topic_env if topic_env else None
         # Optional env var
@@ -65,7 +68,8 @@ class GhsGithub:
         dict_env["topic_exclude_name"] = topic_exclude_env if topic_exclude_env else None
         if dict_env["repo_owner"] is None:
             return None
-        return dict_env
+        self.dict_env = dict_env
+        return self.dict_env
 
     def check_API_rate_limit(self, response: Response) -> bool:
         """
@@ -618,37 +622,88 @@ class GhsGithub:
 
         return list_dict_contributor_stats
 
-    def get_repos_by_topic(self, repo_owner: str, topic: str, topic_exclude: str, since_date_str: str, until_date_str: str) -> list:
+    def get_repos_by_single_topic(self, repo_owner: str, topic: str, since_date_str: str, until_date_str: str) -> list:
         """
         Get all the repos within the org that share the same topic, pushed to in the date range
-        Optionally excluding a topic 
-        (e.g. Include all repos with 'my_co' but exclude from that group all repos with 'infra_team')
         """
         url: str = (
             f'https://api.github.com/search/repositories?q=topic:{topic}'
             f'+org:{repo_owner}'
             f'+pushed:>={since_date_str}+pushed:<{until_date_str}'
-            f'{"+-topic:" + topic_exclude if topic_exclude is not None else ""}'
         )
 
         response = self.github_request_exponential_backoff(url)
 
         item_list: Dict = {}
-        item_list_returned: list = []
+        repo_list_returned: list = []
         if response is not None and isinstance(response, List) and len(response) > 0:
             pages_list: List = response
             for page in pages_list:
                 item_list = page.get('items', [])
                 for item in item_list:
-                    item_list_returned.append(item["name"])
-            return item_list_returned
+                    repo_list_returned.append(item["name"])
+            return repo_list_returned
+
+    def get_repos_by_topic(self, repo_owner: str, topic: str, topic_exclude: str, since_date_str: str, until_date_str: str) -> list:
+        """ Get all the repos within the org that share the same topic, pushed to in the date range, 
+        also allowing for the special case of "all" to get all repos in the org."""
+        repo_list_returned: list = []
+        item_list_single_topic: list = []
+        # Special case - "all" means all repos in the org. Get the dict of all topics and iterate thru it
+        if topic and topic.lower() == "all":  # Case insensitive match
+            for topic in self.dict_env["dict_all_repo_topics"]:
+                item_list_single_topic = self.get_repos_by_single_topic(
+                    repo_owner, topic, since_date_str, until_date_str)
+                repo_list_returned.extend(item_list_single_topic)
+            # Override "all" with the actual list of repos
+            self.dict_env["repo_names"] = repo_list_returned
+        else:
+            repo_list_returned = self.get_repos_by_single_topic(
+                repo_owner, topic, since_date_str, until_date_str)
+        return repo_list_returned
+
+    def get_organization_repo_names(self, org_name: str) -> List[str]:
+        """
+        Fetches names of all repositories owned by the specified organization.
+
+        Args:
+            org_name (str): The name of the organization.
+
+        Returns:
+            List[str]: A list of repository names owned by the organization.
+        """
+        # GitHub API endpoint for fetching organization repositories.
+        url = f"https://api.github.com/orgs/{org_name}/repos"
+
+        # Initial parameters for pagination
+        params = {
+            "per_page": 100,  # Adjust per_page to the maximum allowed to minimize the number of requests
+            "type": "all"  # Fetch all repos including forks, sources, and private repos if the token has permissions
+        }
+
+        # Use the exponential backoff helper function to handle API rate limits and possible errors.
+        repos_pages = self.github_request_exponential_backoff(url, params)
+
+        # Extract just the names of the repositories from each page of results
+        repo_names = [repo['name'] for page in repos_pages for repo in page]
+
+        return repo_names
 
     def get_repo_topics(self, repo_owner: str, repo_names: list) -> dict:
         """
         Returns a dict of {repo_name: [list of topics], ...}
+        if repo_names contains "all", it will get all the topics for all the repos in the org
         """
         dict_repo_topics: dict = {}
         url_base: str = f"https://api.github.com/repos/{repo_owner}"
+
+        # Override the repo_names list with all the repos in the org
+        if "all" in repo_names:
+            repo_names = self.get_organization_repo_names(repo_owner)
+            self.dict_env["repo_names"] = repo_names
+            print(
+                f"Getting all topics for all {len(repo_names)} repos in {repo_owner}.")
+
         for repo in repo_names:
             url = f"{url_base}/{repo}/topics"
             response = self.github_request_exponential_backoff(url)
@@ -727,39 +782,50 @@ class GhsGithub:
         return
 
     def get_repo_data_over_months(self) -> None:
-        dict_env: dict = self.get_env()
-        if dict_env is None:
+        """ this initializes the process of getting repo data over the months in the lookback period
+        it first starts by getting the .env settings, establishing the member dict_env, for access to settings"""
+        self.get_env()
+        if self.dict_env is None:
             print(f"Missing env vars - README")
             return
 
-        repo_names: str = dict_env["repo_names"]
+        repo_names: str = self.dict_env["repo_names"]
 
-        since_date: date = get_date_months_ago(dict_env["months_lookback"])
+        since_date: date = get_date_months_ago(
+            self.dict_env["months_lookback"])
         since_date_str: str = since_date.strftime('%Y-%m-%d')
 
-        # If there were no repo_names in .env, we can pull the repos based on the topic
-        if len(repo_names) == 0 and dict_env["topic_name"] is not None:
+        # Get the topics for all the repos. Need this now because we accept "all" as a topic, below
+        # We stash the dict of repo_topics in the settings for use later
+        dict_repo_topics: dict = self.get_repo_topics(
+            self.dict_env["repo_owner"], repo_names)
+        if len(dict_repo_topics) > 0:
+            self.dict_env["dict_all_repo_topics"] = dict_repo_topics.copy()
+            self.store_repo_topics(dict_repo_topics)
+
+        # If there were no repo_names in .env, we can pull the repos based on the topic (which can be "all")
+        if len(repo_names) == 0 and self.dict_env["topic_name"] is not None:
             until_date = get_end_of_last_complete_month()
             until_date_str: str = until_date.strftime('%Y-%m-%d')
             repo_names = self.get_repos_by_topic(
-                dict_env["repo_owner"], dict_env["topic_name"], dict_env["topic_exclude_name"], since_date_str, until_date_str)
+                self.dict_env["repo_owner"], self.dict_env["topic_name"], self.dict_env["topic_exclude_name"], since_date_str, until_date_str)
 
         # Filter out repos in exclude list
         repo_names = [
-            item for item in repo_names if item not in dict_env["repo_names_exclude"]]
+            item for item in repo_names if item not in self.dict_env["repo_names_exclude"]]
 
-        dict_repo_topics: dict = self.get_repo_topics(
-            dict_env["repo_owner"], repo_names)
-        self.store_repo_topics(dict_repo_topics)
-
-        if len(repo_names) == 0 and dict_env["topic_name"] is None:
+        if len(repo_names) == 0 and self.dict_env["topic_name"] is None:
             print(f'Either TOPIC or REPO_NAMES must be provided in .env')
             sys.exit()
 
         # Tell the user what they're getting
         print(
-            f'Stats for {len(repo_names)} {dict_env["repo_owner"]} repos since {since_date_str}:')
-        print(f', '.join(repo_names))
+            f'Stats for {len(repo_names)} {self.dict_env["repo_owner"]} repos since {since_date_str}:')
+        if (len(repo_names) < MAX_REPO_NAMES_TO_PRINT):  # Don't print out too many
+            print(f', '.join(repo_names))
+        else:
+            print(
+                f"Too many repos to list (more than {MAX_REPO_NAMES_TO_PRINT}).")
         # END - TO DO move into the loop section below
 
         # Loop for each month in the lookback period and pull stats
@@ -770,18 +836,19 @@ class GhsGithub:
         for repo in repo_names:
             # Initialize until_date to the last day of the last complete month (which is only today if today is the last day)
             current_until_date: date = get_end_of_last_complete_month()
-            since_date: date = get_date_months_ago(dict_env["months_lookback"])
+            since_date: date = get_date_months_ago(
+                self.dict_env["months_lookback"])
             since_date_str: str = since_date.strftime('%Y-%m-%d')
             until_date = get_end_of_last_complete_month()
             until_date_str: str = until_date.strftime('%Y-%m-%d')
-            for month_delta in range(1, dict_env["months_lookback"] + 1):
+            for month_delta in range(1, self.dict_env["months_lookback"] + 1):
                 # Calculate the start (since_date) of the month period
                 since_date = current_until_date - relativedelta(months=1)
                 print(
-                    f'\nGetting stats for {dict_env["repo_owner"]} from {since_date.strftime("%Y-%m-%d")} to {current_until_date.strftime("%Y-%m-%d")}')
+                    f'\nGetting stats for {self.dict_env["repo_owner"]} from {since_date.strftime("%Y-%m-%d")} to {current_until_date.strftime("%Y-%m-%d")}')
                 current_period_contributors_stats: List[Dict[str, Any]] = []
                 current_period_contributors_stats = self.get_contributors_stats(
-                    dict_env, repo, since_date, current_until_date)
+                    self.dict_env, repo, since_date, current_until_date)
                 # Extend our list: store this iteration's list of dict of stats in our main list
                 list_dict_contributors_stats.extend(
                     current_period_contributors_stats)

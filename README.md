@@ -19,31 +19,49 @@ python3 ghstats.py
 
 ### Your API token
 
-GITHUB_API_TOKEN=
+`GITHUB_API_TOKEN=URTOKENHERE`
 
 ### Your Org name
 
-REPO_OWNER=my_orgname
+`REPO_OWNER=my_orgname`
 
 ### Comma-separated list of repos
 
-REPO_NAMES=repo1,repo2,repo3
+`REPO_NAMES=repo1,repo2,repo3`
+If this contains "all", _every_ repo will be pulled.
 
 ### How many months of data you want to pull
 
-DEFAULT_MONTHS_LOOKBACK=3
+`DEFAULT_MONTHS_LOOKBACK=3`
 
 ### If the contributor is new to the repo, what's the minimum time before you want to include them in results?
 
-MIN_WORKDAYS_AS_CONTRIBUTOR=30
+`MIN_WORKDAYS_AS_CONTRIBUTOR=30`
 
 ### Topic - if your Github org uses topics to group repos by team
 
-TOPIC=your-topic-name
+`TOPIC=your-topic-name`
+If "all", every topic, and thus _every repo in every topic_, will be pulled.
 
-### Users to exclude from measuring. Often there are bots that comment on PRs. Don't measure stats on these.
+### Users to exclude from measuring
 
-USER_EXCLUDE=username
+Often there are bots that comment on PRs. Don't measure stats on these.
+
+`USER_EXCLUDE=username`
+
+## Database Settings -
+
+Snowflake DB is the only one we support
+
+SNOWFLAKE_USER=
+SNOWFLAKE_PASSWORD=
+SNOWFLAKE_ACCOUNT=
+SNOWFLAKE_WAREHOUSE=
+SNOWFLAKE_DB=
+SNOWFLAKE_SCHEMA=
+SNOWFLAKE_TABLE_NAME_STAGING=
+SNOWFLAKE_TABLE_NAME=
+SNOWFLAKE_TABLE_NAME_CONTRIBUTORS=
 
 # CSV File Output Format
 
