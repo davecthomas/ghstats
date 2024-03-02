@@ -78,6 +78,18 @@ CREATE TABLE "contributors" (
     PRIMARY KEY ("contributor_nodeid")
 );
 
+CREATE TABLE "repo_stats" (
+    "repo" VARCHAR(255),
+    "stats_beginning" DATE,
+    "stats_ending" DATE,
+    "avg_pr_duration" FLOAT,
+    "median_pr_duration" FLOAT,
+    "num_prs" INT,
+    "num_commits" INT,
+    PRIMARY KEY ("repo", "stats_beginning")
+);
+
+
 -- A repo can have multiple topics. A topic can belong to multiple repos.  
 CREATE TABLE "repo_topics" (
     "repo_name" VARCHAR(255),

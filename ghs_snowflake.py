@@ -452,3 +452,34 @@ class GhsSnowflakeStorageManager:
             finally:
                 conn.close()
         return inserted
+
+    def insert_repo_stats(self, list_dict_repo_stats: List) -> None:
+        """
+        Inserts new repo stats into Snowflake, avoiding duplicates.
+
+        Args:
+            list_dict_repo_stats (List): List of dictionaries containing new repo stats.
+        Don't insert if the record already exists.
+        """
+        conn = self.get_snowflake_connection()
+        check_sql = """
+            SELECT COUNT(*) FROM repo_stats
+            WHERE repo = %s AND stats_beginning = %s
+        """
+
+        # SQL to insert the record
+        insert_sql = """
+            INSERT INTO repo_stats (repo, stats_beginning, stats_ending, avg_pr_duration, num_prs, num_commits)
+            VALUES (%s, %s, %s, %s, %s, %s)
+        """
+        for record in list_dict_repo_stats:
+            cursor = conn.cursor()
+            cursor.execute(
+                check_sql, (record['repo'], record['stats_beginning']))
+            result = cursor.fetchone()
+            if result[0] == 0:
+                cursor.execute(insert_sql, (record['repo'], record['stats_beginning'], record['stats_ending'],
+                               record['avg_pr_duration'], record['num_prs'], record['num_commits']))
+                conn.commit()
+        conn.close()
+        return

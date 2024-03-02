@@ -25,6 +25,7 @@ MAX_ITEMS_PER_PAGE = 100  # Limited by Github API
 MIN_WORKDAYS_AS_CONTRIBUTOR = int(os.getenv("MIN_WORKDAYS_AS_CONTRIBUTOR", 30))
 STATS_TABLE_NAME = "CONTRIBUTOR_STATS"
 MAX_REPO_NAMES_TO_PRINT = 20  # Limit the number of repo names we print out in the log
+SECONDS_PER_DAY = 86400  # For calculating PR durations
 
 # Our "cache" of contributors basic attributes
 # {username: {"display_name": Display name, "node_id": node_id}}
@@ -207,11 +208,27 @@ class GhsGithub:
         else:
             return None
 
-    def get_pr_stats(self, repo_owner: str, repo_name: str, since_date: date, until_date: date) -> Tuple[List[Dict[str, any]], List[Dict[str, any]]]:
+    def get_pr_stats(self, repo_owner: str, repo_name: str, since_date: date, until_date: date) -> Dict[str, any]:
         """
-        Returns all commenter stats and durations for all PRs in a repo during the date interval
-        This is 2 lists of dictionaries returned as a tuple (commenters_stats, contributor_stats)
+        Returns all commenter stats, durations for all PRs in a repo during the date interval, 
+        and earliest date of each PR in the time interval. This is used later to calculate the duration of each PR.
+        { "commenters_stats": List[Dict[str, any]], 
+        "contributor_pr_durations": List[Dict[str, any]], 
+        "prs_durations_dict": List[Dict[str, any]]}
+        where prs_durations_dict is a dictionary of {pr_number: duration in days from first commit to closure}
+
+        This might be confusing. We're returning contributors_pr_durations_list as well as prs_durations_dict
+        Each of these is used for a different, but related, purpose. 
+        The first is used to calculate the average duration of a PR for each contributor.
+        The second is used to calculate the duration of each PR. One is focued on the contributor, the other on the repo as a whole.
+        Since a different person might be submitting the first commit in a PR, we don't want to conflate the two.
+
+        TO DO: we aren't currently calculating or storing the duration of each PR. TBD after testing. 
+        1. Store this as an average for each repo in the database for each time period
         """
+        pr_stats_dict: Dict[str, any] = {"commenters_stats": {
+        }, "contributor_pr_durations": {}, "prs_durations_dict": {}}
+
         # Exclude bot users who don't get measured
         user_exclude_env: str = os.getenv('USER_EXCLUDE', None)
         user_exclude_list = user_exclude_env.split(
@@ -245,9 +262,11 @@ class GhsGithub:
         # Also, get the duration of each PR
         commenters: Dict[str, any] = {}
         contributors: Dict[str, any] = {}
+        prs_durations_dict: Dict[str, datetime] = {}
         for pull_requests in pull_requests_pages:
             pull_requests_items: list = pull_requests.get("items", [])
             for pr in pull_requests_items:
+                datetime_pr_closed: datetime = None
                 # First, get duration
                 duration_countable: bool = False
                 try:
@@ -262,10 +281,14 @@ class GhsGithub:
                     duration = get_duration_in_days(
                         pr['created_at'], merged_at)
                     duration_countable = True
+                    datetime_pr_closed = datetime.strptime(
+                        merged_at, '%Y-%m-%dT%H:%M:%SZ')
                 elif closed_at:
                     duration = get_duration_in_days(
                         pr['created_at'], closed_at)
                     duration_countable = True
+                    datetime_pr_closed = datetime.strptime(
+                        closed_at, '%Y-%m-%dT%H:%M:%SZ')
                 if duration_countable:
                     # Save a tuple of total duration, number of PRs (so we can average later)
                     if contributor_name not in contributors:
@@ -284,7 +307,7 @@ class GhsGithub:
 
                 pr_number = pr.get('number', None)
                 reviews_url = pr_number and f"{pr_reviews_base_url}/{pr_number}/reviews"
-                pr.get("review_comments_url", None)
+                # pr.get("review_comments_url", None)
                 reviews_response = reviews_url and self.github_request_exponential_backoff(
                     reviews_url)
                 if reviews_response is not None \
@@ -292,7 +315,6 @@ class GhsGithub:
                     reviews_pages = reviews_response
 
                 for reviews in reviews_pages:
-
                     # Count state changes where the reviewer should get credit for their contribution
                     # TO DO: consider only providing credit for reviews with a "body" length < x,
                     # Since "LGTM" reviews are likely not contributing enough value to be counted.
@@ -314,11 +336,38 @@ class GhsGithub:
                                 commenters[reviewer_name] = 1
                             else:
                                 commenters[reviewer_name] += 1
+                                reviews_url = pr_number and f"{pr_reviews_base_url}/{pr_number}/reviews"
+
+                # Get commits and get first date of commit per PR
+                commits_url = pr_number and f"{pr_reviews_base_url}/{pr_number}/commits"
+                commits_response = commits_url and self.github_request_exponential_backoff(
+                    commits_url)
+                if commits_response is not None \
+                        and isinstance(commits_response, List) and len(commits_response) > 0:
+                    commits_pages = commits_response
+
+                # Find the earliest commit across any pages of commits returned
+                first_commit_datetime = datetime.now()  # default to now
+                for commits in commits_pages:
+                    try:
+                        commit_datetime: datetime = datetime.strptime(
+                            commits[0]['commit']['author']['date'], '%Y-%m-%dT%H:%M:%SZ')
+                        if commit_datetime < first_commit_datetime:
+                            first_commit_datetime = commit_datetime
+                        # datetime_pr_closed
+                    except KeyError:
+                        continue
+                    except TypeError:
+                        continue
+
+                # Calculate the overall duration of the PR based on the bookends of first commit and closure
+                prs_durations_dict[pr_number] = (
+                    datetime_pr_closed - first_commit_datetime).total_seconds() / SECONDS_PER_DAY
 
         # Convert the dictionary of tuples to a list of dictionaries
-        contributors_list: List[Dict[str, any]] = []
+        contributors_pr_durations_list: List[Dict[str, any]] = []
         if len(contributors) > 0:
-            contributors_list = [
+            contributors_pr_durations_list = [
                 {'contributor_name': name, 'total_duration': duration, 'num_prs': prs}
                 for name, (duration, prs) in contributors.items()
             ]
@@ -328,8 +377,10 @@ class GhsGithub:
                                for k, v in commenters.items()]
             commenters_list = sorted(
                 commenters_list, key=lambda x: x['num_comments'], reverse=True)
-
-        return commenters_list, contributors_list
+        pr_stats_dict["commenters_stats"] = commenters_list
+        pr_stats_dict["contributor_pr_durations"] = contributors_pr_durations_list
+        pr_stats_dict["prs_durations_dict"] = prs_durations_dict
+        return pr_stats_dict
 
     def get_first_commit_date(self, repo_owner, repo_name, contributor_username) -> date:
         """
@@ -421,21 +472,31 @@ class GhsGithub:
         return df
 
     def get_contributors_stats(self, env_dict: dict, repo_name: str,
-                               since_date: date, until_date: date) -> List[Dict[str, Any]]:
+                               since_date: date, until_date: date) -> Dict[str, Any]:
         """
         For each repo in the list of repos, 
-        Get the PR stats, returning 2 list of dictionaries with the username as the key in each dict.
+        Get the PR stats
         -   One list of dict of PR review stats
         -   One list of dict of PR durations and counts
+        -   One dict of PR durations for each PR
 
         Get commits and count up changed lines of code per contributor
 
         Aggregate all this into a single dictionary of stats for the each contributor, so their stats
         accumulate (or average, depending on the stat), across all repos in the list. 
         For example, we average the PR open duration, but we accumulate PRs and commits
+
+        Returns: A dictionary of  {contributor_stats: List[Dict[str, any]], repo_stats: Dict[str, any]}
+        1. "contributor_stats" - a list of dictionaries of stats for each contributor
+        2. "repo_stats" - a dictionary of stats for the repo as a whole
         """
+        dict_return: Dict[str, any] = {
+            "contributor_stats": [], "repo_stats": Dict[str, any]}
         # This is the list of dictionaries of our stats, which this function populates
         list_dict_contributor_stats: List[Dict[str, Any]] = []
+        dict_repo_stats: Dict[str, Any] = {
+            "repo_name": repo_name, "avg_pr_duration": 0.0, "median_pr_duration": 0.0,
+            "num_prs": 0, "num_commits": 0}
 
         # Average PR durations for a contributor. One avg per repo. A list across all repos.
         # contributor_name: [list of averages]
@@ -443,14 +504,27 @@ class GhsGithub:
 
         max_num_workdays = get_workdays(since_date, until_date)
 
-    # this was a loop
-
         # Get the PR reviewer activity and duration of PRs for each contributor to this repo
-        pr_stats_tuple: Tuple[List[Dict[str, any]], List[Dict[str, any]]] = self.get_pr_stats(
+        # pr_stats_tuple: Tuple[List[Dict[str, any]], List[Dict[str, any]]] = self.get_pr_stats(
+        #     env_dict["repo_owner"], repo_name, since_date, until_date)
+        dict_pr_stats: Dict = self.get_pr_stats(
             env_dict["repo_owner"], repo_name, since_date, until_date)
 
         # unpack the tuple into 2 list of dict - which we'll process in the user loop below
-        list_dict_commenter_stats, list_dict_pr_durations = pr_stats_tuple
+        list_dict_commenter_stats: List[Dict[str, any]] = dict_pr_stats.get(
+            "commenters_stats", [])
+        list_dict_pr_durations: List[Dict[str, any]] = dict_pr_stats.get(
+            "contributor_pr_durations", [])
+        prs_durations_dict: Dict[str, datetime] = dict_pr_stats.get(
+            "prs_durations_dict", {})
+        # Get average PR duration for this entire repo during the time period
+        prs_durations_list: List[datetime] = list(prs_durations_dict.values())
+        dict_repo_stats["avg_pr_duration"] = np.mean(
+            prs_durations_list) if len(prs_durations_dict) > 0 else 0
+        dict_repo_stats["median_pr_duration"] = np.median(
+            prs_durations_list) if len(prs_durations_dict) > 0 else 0
+
+        # list_dict_commenter_stats, list_dict_pr_durations = pr_stats_tuple
 
         # Returns the total number of commits authored by all contributors.
         # In addition, the response includes a Weekly Hash (weeks array) with the following info:
@@ -458,6 +532,10 @@ class GhsGithub:
         # a - Number of additions
         # d - Number of deletions
         # c - Number of commits
+        # IMPORTANT - for repos with > 10K commits, this REST endpoint now returns zero for additions and deletions
+        # See https://github.blog/changelog/2023-11-29-upcoming-changes-to-repository-insights/
+        # If you really need this data on large repos, consider using this git command instead:
+        # git log --pretty="format:%m%ad----%ae%n%-(trailers:only,unfold)" --date=raw --shortstat --no-renames --no-merges
         url = f"{GITHUB_API_BASE_URL}/repos/{env_dict['repo_owner']}/{repo_name}/stats/contributors"
 
         # Get a list of contributors to this repo
@@ -566,8 +644,6 @@ class GhsGithub:
                             else:
                                 dict_avg_durations[contributor_username].append(
                                     avg_duration)
-                            # to do - average the averages for this user across all repos...
-                            # We do this outside the outer repos loop
 
                     # Only save stats if there are stats to save
                     if contributor_stats["commits"] == 0 and contributor_stats["prs"] == 0 \
@@ -619,8 +695,9 @@ class GhsGithub:
             if contributor_name in contributor_average_durations:
                 # Add a new key-value pair for the average duration
                 contributor['avg_pr_duration'] = contributor_average_durations[contributor_name]
-
-        return list_dict_contributor_stats
+        dict_return["contributor_stats"] = list_dict_contributor_stats
+        dict_return["repo_stats"] = dict_repo_stats
+        return dict_return
 
     def get_repos_by_single_topic(self, repo_owner: str, topic: str, since_date_str: str, until_date_str: str) -> list:
         """
@@ -846,8 +923,11 @@ class GhsGithub:
                 print(
                     f'\nGetting stats for {self.dict_env["repo_owner"]} from {since_date.strftime("%Y-%m-%d")} to {current_until_date.strftime("%Y-%m-%d")}')
                 current_period_contributors_stats: List[Dict[str, Any]] = []
-                current_period_contributors_stats = self.get_contributors_stats(
+                dict_stats: Dict[str, Any] = self.get_contributors_stats(
                     self.dict_env, repo, since_date, current_until_date)
+                current_period_contributors_stats = dict_stats.get(
+                    "contributor_stats", [])
+                current_period_repo_stats = dict_stats.get("repo_stats", {})
                 # Extend our list: store this iteration's list of dict of stats in our main list
                 list_dict_contributors_stats.extend(
                     current_period_contributors_stats)
@@ -902,3 +982,8 @@ class GhsGithub:
         storage_manager.insert_new_repo_topics(df_repo_topics)
 
         print(f"Stored {len(df_repo_topics)} repository topics in Snowflake.")
+
+    """ GraphQL endpoint support starts here"""
+    GITHUB_GRAPHQL_URL: str = 'https://api.github.com/graphql'
+    """ Important note! The GraphQL API is currently in preview and subject to change.
+    the GraphQL API doesn't support querying by date range, which makes it useless for this program."""
