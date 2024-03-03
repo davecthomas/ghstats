@@ -13,6 +13,7 @@ from scipy.stats import norm
 from dateutil.relativedelta import relativedelta
 from requests.models import Response
 from ghs_snowflake import GhsSnowflakeStorageManager
+from collections import defaultdict
 
 # The Zen of Python would rather I "import ghs_utils" and prefix all functions with ghs_utils.
 from ghs_utils import *
@@ -846,17 +847,54 @@ class GhsGithub:
         Dumps the dataframe to the staging table
         Merges the staging table contents to the main table (prevents dupes)
         """
-        storage_manager.upsert_dataframe(df, storage_manager.get_db_env().get(
+        count: int = storage_manager.upsert_contributor_stats_dataframe(df, storage_manager.get_db_env().get(
             "snowflake_table_name", ""), storage_manager.get_db_env().get("snowflake_table_name_staging", ""))
 
         storage_manager.close_connection()
         return
 
-    def store_repo_topics(self, dict_repo_topics: dict) -> None:
+    def store_repo_stats(self, list_dict_repo_stats: List[Dict[str, Any]]) -> None:
         storage_manager: GhsSnowflakeStorageManager = GhsSnowflakeStorageManager()
-        storage_manager.store_repo_topics(dict_repo_topics)
+        count: int = storage_manager.store_repo_stats(list_dict_repo_stats)
         storage_manager.close_connection()
         return
+
+    def store_repo_topics(self, dict_repo_topics: dict) -> None:
+        storage_manager: GhsSnowflakeStorageManager = GhsSnowflakeStorageManager()
+        count: int = storage_manager.store_repo_topics(dict_repo_topics)
+        storage_manager.close_connection()
+        return
+
+    def merge_repo_stats(self, list_dict_repo_stats: List[Dict[str, Any]], list_dict_contributors_stats: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """
+        Merge the contributor_stats into the repo_stats
+        This is where we accumulate the PRs and commits for each repo from our individual contributor stats
+        and add them to the repo stats list of dicts
+        Once this is done, we have a list of dictionaries that is ready for storage in DB
+        Returns: list of dicts of repo stats, ready for storage (which is unnecessary since it's modified in place)
+        The reason for this requires a bit of python knowledge about mutable vs immutable objects. 
+        Immutable objects such as strings, numbers, and tuples are immutable. 
+        This means that once they are created, they cannot be changed.
+        Mutable objects such as lists, sets, and dictionaries are mutable. 
+        This means that they can be changed after they are created.
+        Since we're changing a list, it is mutable and therefore we don't need to return it explicitly.
+        """
+        # Sum PRs and commits for each repo using defaultdict
+        dict_repo_stats_aggregated = defaultdict(
+            lambda: {"num_prs": 0, "num_commits": 0})
+        for stat in list_dict_contributors_stats:
+            dict_repo_stats_aggregated[stat["repo_name"]
+                                       ]["num_prs"] += stat["prs"]
+            dict_repo_stats_aggregated[stat["repo_name"]
+                                       ]["num_commits"] += stat["commits"]
+
+        # Add num_prs and num_commits to each repo stats
+        for repo_stat in list_dict_repo_stats:
+            repo_name = repo_stat["repo_name"]
+            if repo_name in dict_repo_stats_aggregated:
+                repo_stat.update(dict_repo_stats_aggregated[repo_name])
+        # this return is unnecessary, but it's here for clarity, since the list is modified in place
+        return list_dict_repo_stats
 
     def get_repo_data_over_months(self) -> None:
         """ this initializes the process of getting repo data over the months in the lookback period
@@ -908,6 +946,8 @@ class GhsGithub:
         # The first until_date is now. Step back 1 month each iteration
         # Initialize contributor_stats as an empty dictionary. Then add to it each iteration
         list_dict_contributors_stats: List[Dict[str, Any]] = []
+        # Initialize repo_stats as an empty dictionary. Then add to it each iteration.
+        list_dict_repo_stats: List[Dict[str, Any]] = []
 
         for repo in self.dict_env["repo_names"]:
             # Initialize until_date to the last day of the last complete month (which is only today if today is the last day)
@@ -931,16 +971,23 @@ class GhsGithub:
                 # Extend our list: store this iteration's list of dict of stats in our main list
                 list_dict_contributors_stats.extend(
                     current_period_contributors_stats)
+                list_dict_repo_stats.append(current_period_repo_stats)
                 # Update until_date for the next iteration to step back another month
                 current_until_date = since_date
 
             # Store this repo data for the whole sequence of months
             df: pd.DataFrame = self.prepare_for_storage(
                 list_dict_contributors_stats)
-            if df is not None and len(df) > 0:
+            if df is not None and not df.empty > 0:
                 print(
                     f"\tRetrieved stats for {len(df)} contributors. Merging them.")
                 self.store_contributor_stats(df)
+            if list_dict_repo_stats:
+                list_dict_repo_stats = self.merge_repo_stats(
+                    list_dict_repo_stats, list_dict_contributors_stats)
+                print(
+                    f"\tRetrieved stats for {len(list_dict_repo_stats)} repos. Storing them.")
+                self.store_repo_stats(list_dict_repo_stats)
 
     def retrieve_and_store_org_repos(self):
         """

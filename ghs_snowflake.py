@@ -174,7 +174,7 @@ class GhsSnowflakeStorageManager:
         print("")
         # conn.close()
 
-    def upsert_dataframe(self, df: pd.DataFrame, target_table: str, staging_table: str) -> int:
+    def upsert_contributor_stats_dataframe(self, df: pd.DataFrame, target_table: str, staging_table: str) -> int:
         """
         Upserts data from a DataFrame into the target table using a staging table.
         This is to avoid us having duplicate records when we re-run similar timeframes for the same
@@ -383,6 +383,7 @@ class GhsSnowflakeStorageManager:
 
     def upsert_contributors(self, df: pd.DataFrame) -> None:
         # Fetch existing contributors and convert to a DataFrame
+        count: int = 0
         existing_contributors_list: [] = self.fetch_existing_contributors()
         if len(existing_contributors_list) == 0:
             self.store_df(df, self.get_db_env().get(
@@ -397,11 +398,10 @@ class GhsSnowflakeStorageManager:
                 existing_contributors_df['contributor_nodeid'])]
 
             # Insert new contributors
-            count: int = 0
             if not new_records_df.empty:
                 count = self.insert_new_contributors(new_records_df)
 
-        return
+        return count
 
     def get_existing_repo_topics(self) -> Set[Tuple[str, str]]:
         """
@@ -424,12 +424,13 @@ class GhsSnowflakeStorageManager:
             conn.close()
         return existing_topics
 
-    def insert_new_repo_topics(self, new_topics_df: pd.DataFrame) -> None:
+    def insert_new_repo_topics(self, new_topics_df: pd.DataFrame) -> int:
         """
         Inserts new repo topics into Snowflake, avoiding duplicates.
 
         Args:
             new_topics_df (pd.DataFrame): DataFrame containing new repo topics with columns 'repo_name' and 'repo_topic'.
+        Returns: count of inserted records
         """
         existing_topics: Set[Tuple[str, str]] = self.get_existing_repo_topics(
         )  # Retrieve existing topics
@@ -453,14 +454,16 @@ class GhsSnowflakeStorageManager:
                 conn.close()
         return inserted
 
-    def insert_repo_stats(self, list_dict_repo_stats: List) -> None:
+    def store_repo_stats(self, list_dict_repo_stats: List) -> int:
         """
         Inserts new repo stats into Snowflake, avoiding duplicates.
 
         Args:
             list_dict_repo_stats (List): List of dictionaries containing new repo stats.
         Don't insert if the record already exists.
+        Returns: count of inserted records
         """
+        count: int = 0
         conn = self.get_snowflake_connection()
         check_sql = """
             SELECT COUNT(*) FROM repo_stats
@@ -481,5 +484,6 @@ class GhsSnowflakeStorageManager:
                 cursor.execute(insert_sql, (record['repo'], record['stats_beginning'], record['stats_ending'],
                                record['avg_pr_duration'], record['num_prs'], record['num_commits']))
                 conn.commit()
+                count += 1
         conn.close()
-        return
+        return count
