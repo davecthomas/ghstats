@@ -78,10 +78,21 @@ CREATE TABLE "contributors" (
     PRIMARY KEY ("contributor_nodeid")
 );
 
+-- repo_name - the name of the repository
+-- stats_beginning - the beginning of the stats period
+-- stats_ending - the end of the stats period
+-- num_workdays - the number of workdays in the period
+-- num_contributors - the number of contributors to the repo
+-- avg_pr_duration - the average duration of a pull request across the repo during the period
+-- median_pr_duration - the median duration of a pull request across the repo during the period
+-- num_prs - the number of pull requests across the repo during the period
+-- num_commits - the number of commits across the repo during the period
 CREATE TABLE "repo_stats" (
     "repo_name" VARCHAR(255),
     "stats_beginning" DATE,
     "stats_ending" DATE,
+    "num_workdays" INT,
+    "num_contributors" INT,
     "avg_pr_duration" FLOAT,
     "median_pr_duration" FLOAT,
     "num_prs" INT,
@@ -96,3 +107,17 @@ CREATE TABLE "repo_topics" (
     "repo_topic" VARCHAR(255),
     PRIMARY KEY ("repo_name", "repo_topic") 
 );
+
+-- SQL here for convenience to backup the contributor_stats table
+-- BEGIN TRANSACTION;
+
+-- -- Empty the destination table
+-- DELETE FROM "contributor_stats_backup";
+
+-- -- Copy contents from the source table to the destination table
+-- INSERT INTO "contributor_stats_backup"
+-- SELECT * FROM "contributor_stats";
+
+-- COMMIT;
+
+

@@ -493,17 +493,24 @@ class GhsGithub:
         """
         dict_return: Dict[str, any] = {
             "contributor_stats": [], "repo_stats": Dict[str, any]}
+
         # This is the list of dictionaries of our stats, which this function populates
         list_dict_contributor_stats: List[Dict[str, Any]] = []
+
+        max_num_workdays = get_workdays(since_date, until_date)
+        # This is the dictionary of our stats for the repo, which this function populates
         dict_repo_stats: Dict[str, Any] = {
-            "repo_name": repo_name, "avg_pr_duration": 0.0, "median_pr_duration": 0.0,
+            "repo_name": repo_name,
+            "stats_beginning": since_date,
+            "stats_ending": until_date,
+            "num_workdays": max_num_workdays,
+            "num_contributors": 0,
+            "avg_pr_duration": 0.0, "median_pr_duration": 0.0,
             "num_prs": 0, "num_commits": 0}
 
         # Average PR durations for a contributor. One avg per repo. A list across all repos.
         # contributor_name: [list of averages]
         dict_avg_durations: Dict[str, List[float]] = {}
-
-        max_num_workdays = get_workdays(since_date, until_date)
 
         # Get the PR reviewer activity and duration of PRs for each contributor to this repo
         # pr_stats_tuple: Tuple[List[Dict[str, any]], List[Dict[str, any]]] = self.get_pr_stats(
@@ -524,8 +531,6 @@ class GhsGithub:
             prs_durations_list) if len(prs_durations_dict) > 0 else 0
         dict_repo_stats["median_pr_duration"] = np.median(
             prs_durations_list) if len(prs_durations_dict) > 0 else 0
-
-        # list_dict_commenter_stats, list_dict_pr_durations = pr_stats_tuple
 
         # Returns the total number of commits authored by all contributors.
         # In addition, the response includes a Weekly Hash (weeks array) with the following info:
@@ -636,8 +641,8 @@ class GhsGithub:
                         if dict_pr_durations["contributor_name"] == contributor_username:
                             # Add PRs from get_pr_stats
                             contributor_stats["prs"] += dict_pr_durations["num_prs"]
-                            avg_duration = round(dict_pr_durations["total_duration"] /
-                                                 dict_pr_durations["num_prs"], 3) if dict_pr_durations["num_prs"] != 0 else 0.0
+                            avg_duration: float = dict_pr_durations["total_duration"] / \
+                                dict_pr_durations["num_prs"] if dict_pr_durations["num_prs"] != 0 else 0.0
                             # add this avg duration to a dict with list of durations for this user, to be averaged later.
                             if contributor_username not in dict_avg_durations:
                                 dict_avg_durations[contributor_name] = [
@@ -696,6 +701,9 @@ class GhsGithub:
             if contributor_name in contributor_average_durations:
                 # Add a new key-value pair for the average duration
                 contributor['avg_pr_duration'] = contributor_average_durations[contributor_name]
+        # Add the number of contributors to the repo stats
+        dict_repo_stats["num_contributors"] = len(list_dict_contributor_stats)
+        # Prepare the return dictionary
         dict_return["contributor_stats"] = list_dict_contributor_stats
         dict_return["repo_stats"] = dict_repo_stats
         return dict_return
