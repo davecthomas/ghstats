@@ -490,4 +490,6 @@ class GhsSnowflakeStorageManager:
                 conn.commit()
                 count += 1
         conn.close()
+        print(
+            f"\tStored {count} into repo_stats of {len(list_dict_repo_stats)} potential rows.")
         return count
