@@ -467,21 +467,21 @@ class GhsSnowflakeStorageManager:
         conn = self.get_snowflake_connection()
         check_sql = """
             SELECT COUNT(*) FROM repo_stats
-            WHERE repo = %s AND stats_beginning = %s
+            WHERE repo_name = %s AND stats_beginning = %s
         """
 
         # SQL to insert the record
         insert_sql = """
-            INSERT INTO repo_stats (repo, stats_beginning, stats_ending, avg_pr_duration, num_prs, num_commits)
+            INSERT INTO repo_stats (repo_name, stats_beginning, stats_ending, avg_pr_duration, num_prs, num_commits)
             VALUES (%s, %s, %s, %s, %s, %s)
         """
         for record in list_dict_repo_stats:
             cursor = conn.cursor()
             cursor.execute(
-                check_sql, (record['repo'], record['stats_beginning']))
+                check_sql, (record['repo_name'], record['stats_beginning']))
             result = cursor.fetchone()
             if result[0] == 0:
-                cursor.execute(insert_sql, (record['repo'], record['stats_beginning'], record['stats_ending'],
+                cursor.execute(insert_sql, (record['repo_name'], record['stats_beginning'], record['stats_ending'],
                                record['avg_pr_duration'], record['num_prs'], record['num_commits']))
                 conn.commit()
                 count += 1
