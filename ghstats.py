@@ -883,9 +883,9 @@ class GhsGithub:
         dict_repo_stats_aggregated = defaultdict(
             lambda: {"num_prs": 0, "num_commits": 0})
         for stat in list_dict_contributors_stats:
-            dict_repo_stats_aggregated[stat["repo_name"]
+            dict_repo_stats_aggregated[stat["repo"]
                                        ]["num_prs"] += stat["prs"]
-            dict_repo_stats_aggregated[stat["repo_name"]
+            dict_repo_stats_aggregated[stat["repo"]
                                        ]["num_commits"] += stat["commits"]
 
         # Add num_prs and num_commits to each repo stats
