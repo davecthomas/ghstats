@@ -347,23 +347,24 @@ class GhsGithub:
                         and isinstance(commits_response, List) and len(commits_response) > 0:
                     commits_pages = commits_response
 
-                # Find the earliest commit across any pages of commits returned
-                first_commit_datetime = datetime.now()  # default to now
-                for commits in commits_pages:
-                    try:
-                        commit_datetime: datetime = datetime.strptime(
-                            commits[0]['commit']['author']['date'], '%Y-%m-%dT%H:%M:%SZ')
-                        if commit_datetime < first_commit_datetime:
-                            first_commit_datetime = commit_datetime
-                        # datetime_pr_closed
-                    except KeyError:
-                        continue
-                    except TypeError:
-                        continue
+                    # Find the earliest commit across any pages of commits returned
+                    first_commit_datetime = datetime.now()  # default to now
+                    for commits in commits_pages:
+                        try:
+                            commit_datetime: datetime = datetime.strptime(
+                                commits[0]['commit']['author']['date'], '%Y-%m-%dT%H:%M:%SZ')
+                            if commit_datetime < first_commit_datetime:
+                                first_commit_datetime = commit_datetime
+                            # datetime_pr_closed
+                        except KeyError:
+                            continue
+                        except TypeError:
+                            continue
 
-                # Calculate the overall duration of the PR based on the bookends of first commit and closure
-                prs_durations_dict[pr_number] = (
-                    datetime_pr_closed - first_commit_datetime).total_seconds() / SECONDS_PER_DAY
+                    # Calculate the overall duration of the PR based on the bookends of first commit and closure
+                    prs_durations_dict[pr_number] = (
+                        datetime_pr_closed - first_commit_datetime).total_seconds() / SECONDS_PER_DAY
+                # (if we don't have any commits in this PR, we skip storing any duration)
 
         # Convert the dictionary of tuples to a list of dictionaries
         contributors_pr_durations_list: List[Dict[str, any]] = []
@@ -412,7 +413,7 @@ class GhsGithub:
                     return None
 
                 # Grab the last item in the list (the first time they committed)
-                first_commit: {} = commits[-1]["commit"]
+                first_commit: Dict[str, any] = commits[-1]["commit"]
                 try:
                     commit_date_str = first_commit["author"]["date"][:10]
                     commit_date: date = datetime.strptime(
@@ -615,6 +616,7 @@ class GhsGithub:
                                              "num_workdays": num_workdays, "commits": 0, "prs": 0,
                                              "review_comments": 0, "changed_lines": 0,
                                              "avg_pr_duration": 0.0,
+                                             "median_pr_review_duration": 0.0,
                                              "avg_code_movement_per_pr": 0}
 
                     # Get a list of contributions per week. If they are in the time window, accumulate.
@@ -690,17 +692,24 @@ class GhsGithub:
 
         # Across all contributions for all repos, calculate avg duration of PRs.
         # Generate a new dictionary with contributor_name to average duration
-        contributor_average_durations: Dict[str, float] = {
-            contributor: sum(durations) / len(durations) if durations else 0
+        dict_average_pr_review_durations: Dict[str, float] = {
+            contributor: np.mean(durations) if durations else 0
+            for contributor, durations in dict_avg_durations.items()
+        }
+        dict_median_pr_review_durations: Dict[str, float] = {
+            contributor: np.median(durations) if durations else 0
             for contributor, durations in dict_avg_durations.items()
         }
         # Merge this into contributors list of dict
         for contributor in list_dict_contributor_stats:
             contributor_name = contributor['contributor_name']
-            # Check if the user_name exists in the contributor_average_durations dictionary
-            if contributor_name in contributor_average_durations:
+            # Check if the user_name exists in the dict_median_pr_review_durations dictionary
+            if contributor_name in dict_median_pr_review_durations:
                 # Add a new key-value pair for the average duration
-                contributor['avg_pr_duration'] = contributor_average_durations[contributor_name]
+                contributor['median_pr_review_duration'] = dict_median_pr_review_durations[contributor_name]
+            if contributor_name in dict_average_pr_review_durations:
+                # Add a new key-value pair for the average duration
+                contributor['avg_pr_duration'] = dict_average_pr_review_durations[contributor_name]
         # Add the number of contributors to the repo stats
         dict_repo_stats["num_contributors"] = len(list_dict_contributor_stats)
         # Prepare the return dictionary
@@ -815,6 +824,8 @@ class GhsGithub:
             df["review_comments_per_day"] = df['review_comments_per_day'].fillna(
                 0)
             df["avg_pr_duration"] = df['avg_pr_duration'].fillna(0)
+            df["median_pr_review_duration"] = df['median_pr_review_duration'].fillna(
+                0)
             df["avg_code_movement_per_pr"] = df['avg_code_movement_per_pr'].fillna(
                 0)
 
@@ -986,10 +997,10 @@ class GhsGithub:
             # Store this repo data for the whole sequence of months
             df: pd.DataFrame = self.prepare_for_storage(
                 list_dict_contributors_stats)
-            if df is not None and not df.empty > 0:
-                print(
-                    f"\tRetrieved stats for {len(df)} contributors. Merging them.")
-                self.store_contributor_stats(df)
+            # if df is not None and not df.empty > 0:
+            #     print(
+            #         f"\tRetrieved stats for {len(df)} contributors. Merging them.")
+            #     self.store_contributor_stats(df)
             if list_dict_repo_stats:
                 list_dict_repo_stats = self.merge_repo_stats(
                     list_dict_repo_stats, list_dict_contributors_stats)

@@ -56,6 +56,7 @@ CREATE TABLE "contributor_stats_staging" (
     "review_comments" INT,
     "changed_lines" INT,
     "avg_pr_duration" FLOAT,
+    "median_pr_review_duration" FLOAT,
     "avg_code_movement_per_pr" FLOAT,
     "commits_per_day" FLOAT,
     "changed_lines_per_day" FLOAT,
