@@ -386,7 +386,7 @@ class GhsSnowflakeStorageManager:
     def upsert_contributors(self, df: pd.DataFrame) -> None:
         # Fetch existing contributors and convert to a DataFrame
         count: int = 0
-        existing_contributors_list: [] = self.fetch_existing_contributors()
+        existing_contributors_list: List = self.fetch_existing_contributors()
         if len(existing_contributors_list) == 0:
             self.store_df(df, self.get_db_env().get(
                 "snowflake_table_name_contributors", ""))
