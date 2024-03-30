@@ -1,5 +1,6 @@
 from typing import List, Dict, Set, Tuple
 import os
+from datetime import date
 import pandas as pd
 import snowflake.connector
 from typing import Dict, Optional, List
@@ -340,7 +341,7 @@ class GhsSnowflakeStorageManager:
         ]
 
         cursor.close()
-        conn.close()
+        self.close_connection()
 
         return existing_contributors
 
@@ -378,7 +379,7 @@ class GhsSnowflakeStorageManager:
 
         # Cleanup
         cursor.close()
-        conn.close()
+        self.close_connection()
 
         print(f"{count} contributors saved.")
         return (count)
@@ -423,7 +424,7 @@ class GhsSnowflakeStorageManager:
                 existing_topics.add((row[0], row[1]))
         finally:
             cursor.close()
-            conn.close()
+            self.close_connection()
         return existing_topics
 
     def insert_new_repo_topics(self, new_topics_df: pd.DataFrame) -> int:
@@ -453,7 +454,7 @@ class GhsSnowflakeStorageManager:
                 inserted = len(df_insert)
                 # print(f"Inserted {len(df_insert)} new repo topics.")
             finally:
-                conn.close()
+                self.close_connection()
         return inserted
 
     def store_repo_stats(self, list_dict_repo_stats: List) -> int:
@@ -491,7 +492,7 @@ class GhsSnowflakeStorageManager:
                                             record['median_pr_duration'], record['num_prs'], record['num_commits']))
                 conn.commit()
                 count += 1
-        conn.close()
+        self.close_connection()
         print(
             f"\tStored {count} into repo_stats of {len(list_dict_repo_stats)} potential rows.")
         return count
@@ -524,6 +525,57 @@ class GhsSnowflakeStorageManager:
                 f"Failed to insert PR review comments into Snowflake. Error: {e}")
         finally:
             # Optionally, close the connection if desired
-            # self.close_connection()
+            self.close_connection()
             pass
         return nrows
+
+    def fetch_pr_comments_body(self, repo_names: List[str], date_since: date = None, date_until: date = None, limit: int = 250) -> List[str]:
+        """
+        Fetches the body of PR comments for specified repositories within an optional date range from Snowflake.
+        Can limit the number of results returned.
+
+        Args:
+            repo_names (List[str]): Names of the repositories.
+            date_since (date, optional): Start date for filtering comments. Defaults to None.
+            date_until (date, optional): End date for filtering comments. Defaults to None.
+            limit (int, optional): Maximum number of PR comment bodies to fetch. Defaults to 250. Use -1 for no limit.
+
+        Returns:
+            List[str]: A list containing the body of each PR comment.
+        """
+        if not repo_names:
+            return []
+
+        conn = self.get_snowflake_connection()
+        cursor = conn.cursor()
+
+        placeholders = ', '.join(['%s' for _ in repo_names])
+
+        query = f"""
+            SELECT "body" FROM "pr_review_comments"
+            WHERE "repo_name" IN ({placeholders})
+        """
+
+        query_conditions = repo_names
+
+        if date_since:
+            query += " AND \"created_at\" >= %s"
+            query_conditions.append(date_since.strftime('%Y-%m-%d'))
+        if date_until:
+            query += " AND \"created_at\" <= %s"
+            query_conditions.append(date_until.strftime('%Y-%m-%d'))
+
+        # Adding limit clause to the SQL query if limit is not -1
+        if limit != -1:
+            query += f" LIMIT {limit}"
+
+        try:
+            cursor.execute(query, query_conditions)
+            records = cursor.fetchall()
+            pr_comments_body = [record[0] for record in records]
+
+        finally:
+            cursor.close()
+            self.close_connection()
+
+        return pr_comments_body

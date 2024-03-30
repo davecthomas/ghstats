@@ -1068,7 +1068,7 @@ class GhsGithub:
             review_comments_pages = self.github_request_exponential_backoff(
                 comments_url)
 
-            review_comments_data = []
+            review_comments_data: List[Dict[str, any]] = []
             for page in review_comments_pages:
                 for comment in page:
                     # Convert comment's created_at to date for comparison

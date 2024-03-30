@@ -1,7 +1,7 @@
-from ghs_snowflake import GhsSnowflakeStorageManager
-
-
+from __future__ import annotations
+from typing import List
 import pandas as pd
+from datetime import date
 
 from ghstats import GhsGithub
 
@@ -122,5 +122,9 @@ def generate_test_data_contributors(num_rows: int) -> pd.DataFrame:
 #     "snowflake_table_name", ""), storage_manager.get_db_env().get("snowflake_table_name_staging", ""))
 
 ghs: GhsGithub = GhsGithub()
-ghs.fetch_and_store_pr_review_comments(["ios-ui"])
+since_date: date = date(2023, 1, 1)
+until_date: date = date(2023, 12, 31)
+list_comments: List[str] = ghs.storage_manager.fetch_pr_comments_body(
+    ["ios-ui"], since_date, until_date, 100)
+print(list_comments)
 # storage_manager.close_connection()
