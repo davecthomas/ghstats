@@ -122,6 +122,5 @@ def generate_test_data_contributors(num_rows: int) -> pd.DataFrame:
 #     "snowflake_table_name", ""), storage_manager.get_db_env().get("snowflake_table_name_staging", ""))
 
 ghs: GhsGithub = GhsGithub()
-ghs.retrieve_and_store_org_repos()
-
+ghs.fetch_and_store_pr_review_comments(["ios-ui"])
 # storage_manager.close_connection()

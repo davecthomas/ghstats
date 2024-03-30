@@ -5,7 +5,7 @@
 -- they are not enforced but can be used by the query optimizer to improve performance. 
 -- When you define a primary key, you're providing Snowflake with information that can be 
 -- used to optimize query plans, even though the uniqueness of primary key values is not enforced.
-CREATE TABLE "contributor_stats" (
+CREATE TABLE IF NOT EXISTS "contributor_stats" (
     "repo" VARCHAR(255),
     "contributor_nodeid" VARCHAR(255),
     "contributor_name" VARCHAR(255),
@@ -41,7 +41,7 @@ CREATE TABLE "contributor_stats" (
 -- support upserts. We store the entire dataframe 
 -- here, then use a merge operation to copy it into 
 -- the contributor_stats table
-CREATE TABLE "contributor_stats_staging" (
+CREATE TABLE  IF NOT EXISTS "contributor_stats_staging" (
     "repo" VARCHAR(255),
     "contributor_nodeid" VARCHAR(255),
     "contributor_name" VARCHAR(255),
@@ -72,7 +72,7 @@ CREATE TABLE "contributor_stats_staging" (
     PRIMARY KEY ("contributor_nodeid", "repo", "stats_beginning")
 );
 
-CREATE TABLE "contributors" (
+CREATE TABLE  IF NOT EXISTS "contributors" (
     "contributor_nodeid" VARCHAR(255),
     "contributor_name" VARCHAR(255),
     "contributor_username" VARCHAR(255),
@@ -88,7 +88,7 @@ CREATE TABLE "contributors" (
 -- median_pr_duration - the median duration of a pull request across the repo during the period
 -- num_prs - the number of pull requests across the repo during the period
 -- num_commits - the number of commits across the repo during the period
-CREATE TABLE "repo_stats" (
+CREATE TABLE  IF NOT EXISTS "repo_stats" (
     "repo_name" VARCHAR(255),
     "stats_beginning" DATE,
     "stats_ending" DATE,
@@ -103,11 +103,22 @@ CREATE TABLE "repo_stats" (
 
 
 -- A repo can have multiple topics. A topic can belong to multiple repos.  
-CREATE TABLE "repo_topics" (
+CREATE TABLE if not EXISTS "repo_topics" (
     "repo_name" VARCHAR(255),
     "repo_topic" VARCHAR(255),
     PRIMARY KEY ("repo_name", "repo_topic") 
 );
+
+-- PR review comments stored to do AI-based analysis of them
+CREATE TABLE IF NOT EXISTS "pr_review_comments" (
+    "comment_id" BIGINT PRIMARY KEY,
+    "repo_name" VARCHAR(256),
+    "pr_number" VARCHAR(64),
+    "user_login" VARCHAR(256),
+    "body" TEXT,
+    "created_at" TIMESTAMP_NTZ
+);
+
 
 -- SQL here for convenience to backup the contributor_stats table
 -- BEGIN TRANSACTION;

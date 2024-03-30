@@ -38,6 +38,14 @@ class GhsGithub:
     def __init__(self):
         self.dict_env: dict = None
         self.dict_env = self.get_env()
+        self.storage_manager = GhsSnowflakeStorageManager()
+
+    def __del__(self):
+        """Destructor to ensure the Snowflake connection is closed."""
+        try:
+            self.storage_manager.close_connection()
+        except Exception as e:
+            print(f"Error closing Snowflake connection: {e}")
 
     def get_env(self) -> dict:
         """
@@ -850,14 +858,13 @@ class GhsGithub:
             print(f"\t No contributors found")
         return df
 
-    def store_contributors(self, storage_manager: GhsSnowflakeStorageManager) -> None:
+    def store_contributors(self) -> None:
         df = pd.DataFrame(list(gdict_user_attributes.values()))
-        storage_manager.upsert_contributors(df)
+        self.storage_manager.upsert_contributors(df)
         return
 
     def store_contributor_stats(self, df: pd.DataFrame) -> None:
-        storage_manager: GhsSnowflakeStorageManager = GhsSnowflakeStorageManager()
-        self.store_contributors(storage_manager)
+        self.store_contributors()
         # storage_manager.save_df_to_csv(df, filename)
         # storage_manager.save_summary_stats_csv(df, filename)
         """
@@ -866,23 +873,18 @@ class GhsGithub:
         Dumps the dataframe to the staging table
         Merges the staging table contents to the main table (prevents dupes)
         """
-        count: int = storage_manager.upsert_contributor_stats_dataframe(df, storage_manager.get_db_env().get(
-            "snowflake_table_name", ""), storage_manager.get_db_env().get("snowflake_table_name_staging", ""))
-
-        storage_manager.close_connection()
+        count: int = self.storage_manager.upsert_contributor_stats_dataframe(df, self.storage_manager.get_db_env().get(
+            "snowflake_table_name", ""), self.storage_manager.get_db_env().get("snowflake_table_name_staging", ""))
         return
 
-    def store_repo_stats(self, list_dict_repo_stats: List[Dict[str, Any]]) -> None:
-        storage_manager: GhsSnowflakeStorageManager = GhsSnowflakeStorageManager()
-        count: int = storage_manager.store_repo_stats(list_dict_repo_stats)
-        storage_manager.close_connection()
-        return
+    def store_repo_stats(self, list_dict_repo_stats: List[Dict[str, Any]]) -> int:
+        count: int = self.storage_manager.store_repo_stats(
+            list_dict_repo_stats)
+        return count
 
-    def store_repo_topics(self, dict_repo_topics: dict) -> None:
-        storage_manager: GhsSnowflakeStorageManager = GhsSnowflakeStorageManager()
-        count: int = storage_manager.store_repo_topics(dict_repo_topics)
-        storage_manager.close_connection()
-        return
+    def store_repo_topics(self, dict_repo_topics: dict) -> int:
+        count: int = self.storage_manager.store_repo_topics(dict_repo_topics)
+        return count
 
     def merge_repo_stats(self, list_dict_repo_stats: List[Dict[str, Any]], list_dict_contributors_stats: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         """
@@ -1008,7 +1010,7 @@ class GhsGithub:
                     f"\tRetrieved stats for {len(list_dict_repo_stats)} repos. Storing them.")
                 self.store_repo_stats(list_dict_repo_stats)
 
-    def retrieve_and_store_org_repos(self):
+    def retrieve_and_store_org_repos(self) -> None:
         """
         Retrieves all repositories for the organization set in the environment variable REPO_OWNER
         and stores their names and topics in the Snowflake 'repo_topics' table.
@@ -1042,14 +1044,52 @@ class GhsGithub:
         # Convert to DataFrame for easy storage
         df_repo_topics = pd.DataFrame(repo_topics_data)
 
-        # Use GhsSnowflakeStorageManager to store the DataFrame in Snowflake
-        storage_manager = GhsSnowflakeStorageManager()
         # Assuming write_pandas is a method you have for writing DFs to Snowflake
-        storage_manager.insert_new_repo_topics(df_repo_topics)
+        self.storage_manager.insert_new_repo_topics(df_repo_topics)
 
         print(f"Stored {len(df_repo_topics)} repository topics in Snowflake.")
 
-    """ GraphQL endpoint support starts here"""
-    GITHUB_GRAPHQL_URL: str = 'https://api.github.com/graphql'
-    """ Important note! The GraphQL API is currently in preview and subject to change.
-    the GraphQL API doesn't support querying by date range, which makes it useless for this program."""
+    def fetch_and_store_pr_review_comments(self, repo_names: List[str], since_date: date = None, until_date: date = None):
+        """
+        Fetches PR review comments for given repositories within a specified date range and stores them in Snowflake.
+        If since_date and until_date are None, all comments are fetched without date filtering.
+
+        Args:
+            repo_names (List[str]): A list of repository names.
+            since_date (date, optional): The start date for filtering comments (inclusive).
+            until_date (date, optional): The end date for filtering comments (inclusive).
+        """
+        repo_owner: str = self.dict_env.get("repo_owner")
+
+        for repo_name in repo_names:
+            print(f"Fetching PR review comments for {repo_name}...")
+            comments_url = f"{GITHUB_API_BASE_URL}/repos/{repo_owner}/{repo_name}/pulls/comments"
+
+            review_comments_pages = self.github_request_exponential_backoff(
+                comments_url)
+
+            review_comments_data = []
+            for page in review_comments_pages:
+                for comment in page:
+                    # Convert comment's created_at to date for comparison
+                    comment_date = datetime.strptime(
+                        comment["created_at"], "%Y-%m-%dT%H:%M:%SZ").date()
+
+                    # If dates are provided, filter comments by date range
+                    if (not since_date or comment_date >= since_date) and (not until_date or comment_date <= until_date):
+                        review_comments_data.append({
+                            "comment_id": comment["id"],
+                            "repo_name": repo_name,
+                            "pr_number": comment["pull_request_url"].split("/")[-1],
+                            "user_login": comment["user"]["login"],
+                            "body": comment["body"],
+                            "created_at": comment["created_at"],
+                        })
+
+            # Convert to DataFrame
+            df_review_comments = pd.DataFrame(review_comments_data)
+
+            rows: int = self.storage_manager.insert_pr_review_comments(
+                df_review_comments)
+            print(
+                f"Stored {rows} review comments for {repo_name} in Snowflake.")

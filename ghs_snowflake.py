@@ -495,3 +495,35 @@ class GhsSnowflakeStorageManager:
         print(
             f"\tStored {count} into repo_stats of {len(list_dict_repo_stats)} potential rows.")
         return count
+
+    def insert_pr_review_comments(self, df_review_comments: pd.DataFrame) -> int:
+        """
+        Inserts PR review comments into a Snowflake table.
+
+        Args:
+            df_review_comments (pd.DataFrame): DataFrame containing PR review comments.
+
+        Returns:
+            int: Number of rows inserted.
+        """
+        nrows: int = 0
+        # Ensure the Snowflake connection is established
+        conn = self.get_snowflake_connection()
+
+        # Define the target table name for PR review comments
+        table_name = "pr_review_comments"
+        try:
+            # Use write_pandas to insert the DataFrame into Snowflake
+            success, nchunks, nrows, _ = write_pandas(
+                conn, df_review_comments, table_name)
+
+            print(
+                f"Successfully inserted {nrows} PR review comments into {table_name}.")
+        except Exception as e:
+            print(
+                f"Failed to insert PR review comments into Snowflake. Error: {e}")
+        finally:
+            # Optionally, close the connection if desired
+            # self.close_connection()
+            pass
+        return nrows
