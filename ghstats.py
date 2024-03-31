@@ -38,6 +38,9 @@ class GhsGithub:
     def __init__(self):
         self.dict_env: dict = None
         self.dict_env = self.get_env()
+        self.since_date: date = get_date_months_ago(
+            self.dict_env["months_lookback"])
+        self.until_date: date = get_end_of_last_complete_month()
         self.storage_manager = GhsSnowflakeStorageManager()
 
     def __del__(self):
@@ -78,6 +81,9 @@ class GhsGithub:
         dict_env["topic_exclude_name"] = topic_exclude_env if topic_exclude_env else None
         if dict_env["repo_owner"] is None:
             return None
+        # These next two get initialized in prep_repo_topics
+        dict_env["dict_all_repo_topics"] = {}
+        dict_env["list_all_repo_names"] = []
         self.dict_env = dict_env
         return self.dict_env
 
@@ -725,13 +731,13 @@ class GhsGithub:
         dict_return["repo_stats"] = dict_repo_stats
         return dict_return
 
-    def get_repos_by_single_topic(self, repo_owner: str, topic: str, since_date_str: str, until_date_str: str) -> list:
+    def get_repos_by_single_topic(self, topic: str, since_date_str: str, until_date_str: str) -> list:
         """
         Get all the repos within the org that share the same topic, pushed to in the date range
         """
         url: str = (
             f'https://api.github.com/search/repositories?q=topic:{topic}'
-            f'+org:{repo_owner}'
+            f'+org:{self.dict_env["repo_owner"]}'
             f'+pushed:>={since_date_str}+pushed:<{until_date_str}'
         )
 
@@ -747,22 +753,22 @@ class GhsGithub:
                     repo_list_returned.append(item["name"])
             return repo_list_returned
 
-    def get_repos_by_topic(self, repo_owner: str, topic: str, topic_exclude: str, since_date_str: str, until_date_str: str) -> list:
+    def get_repos_by_topic(self, topic: str, topic_exclude: str, since_date_str: str, until_date_str: str) -> list:
         """ Get all the repos within the org that share the same topic, pushed to in the date range, 
         also allowing for the special case of "all" to get all repos in the org."""
         repo_list_returned: list = []
         item_list_single_topic: list = []
-        # Special case - "all" means all repos in the org. Get the dict of all topics and iterate thru it
+        # Special case - "all" means all repos in the org. Get the dict of all repo-topics and iterate thru it
         if topic and topic.lower() == "all":  # Case insensitive match
             for topic in self.dict_env["dict_all_repo_topics"]:
                 item_list_single_topic = self.get_repos_by_single_topic(
-                    repo_owner, topic, since_date_str, until_date_str)
+                    topic, since_date_str, until_date_str)
                 repo_list_returned.extend(item_list_single_topic)
             # Override "all" with the actual list of repos
             self.dict_env["repo_names"] = repo_list_returned
         else:
             repo_list_returned = self.get_repos_by_single_topic(
-                repo_owner, topic, since_date_str, until_date_str)
+                topic, since_date_str, until_date_str)
         return repo_list_returned
 
     def get_organization_repo_names(self, org_name: str) -> List[str]:
@@ -917,10 +923,21 @@ class GhsGithub:
         # this return is unnecessary, but it's here for clarity, since the list is modified in place
         return list_dict_repo_stats
 
+    def prep_repo_topics(self) -> None:
+        """ this initializes the process of getting repo topics for all repos in the org
+        the format of this dictionary is {repo_name: [list of topics], ...}
+        It then creates a list of all the repo names from the dictionary of repo topics
+        """
+        dict_repo_topics: dict = self.get_repo_topics(
+            self.dict_env["repo_owner"], self.dict_env["repo_names"])
+        if len(dict_repo_topics) > 0:
+            self.dict_env["dict_all_repo_topics"] = dict_repo_topics.copy()
+            self.store_repo_topics(dict_repo_topics)
+            self.dict_env["repo_names"] = list(dict_repo_topics.keys())
+
     def get_repo_data_over_months(self) -> None:
         """ this initializes the process of getting repo data over the months in the lookback period
         it first starts by getting the .env settings, establishing the member dict_env, for access to settings"""
-        self.get_env()
         if self.dict_env is None:
             print(f"Missing env vars - README")
             return
@@ -931,18 +948,15 @@ class GhsGithub:
 
         # Get the topics for all the repos. Need this now because we accept "all" as a topic, below
         # We stash the dict of repo_topics in the settings for use later
-        dict_repo_topics: dict = self.get_repo_topics(
-            self.dict_env["repo_owner"], self.dict_env["repo_names"])
-        if len(dict_repo_topics) > 0:
-            self.dict_env["dict_all_repo_topics"] = dict_repo_topics.copy()
-            self.store_repo_topics(dict_repo_topics)
+        # This also creates a list of all the repo names from the dictionary of repo topics
+        self.prep_repo_topics()
 
         # If there were no repo_names in .env, we can pull the repos based on the topic (which can be "all")
-        if len(self.dict_env["repo_names"]) == 0 and self.dict_env["topic_name"] is not None:
-            until_date = get_end_of_last_complete_month()
-            until_date_str: str = until_date.strftime('%Y-%m-%d')
-            self.dict_env["repo_names"] = self.get_repos_by_topic(
-                self.dict_env["repo_owner"], self.dict_env["topic_name"], self.dict_env["topic_exclude_name"], since_date_str, until_date_str)
+        # if len(self.dict_env["repo_names"]) == 0 and self.dict_env["topic_name"] is not None:
+        #     until_date = get_end_of_last_complete_month()
+        #     until_date_str: str = until_date.strftime('%Y-%m-%d')
+        #     self.dict_env["repo_names"] = self.get_repos_by_topic(
+        #         self.dict_env["topic_name"], self.dict_env["topic_exclude_name"], since_date_str, until_date_str)
 
         # Filter out repos in exclude list
         self.dict_env["repo_names"] = [
@@ -1076,12 +1090,13 @@ class GhsGithub:
                         comment["created_at"], "%Y-%m-%dT%H:%M:%SZ").date()
 
                     # If dates are provided, filter comments by date range
+                    # Sometimes user is None, suggesting perhaps the github user was deleted since the PR comment was made
                     if (not since_date or comment_date >= since_date) and (not until_date or comment_date <= until_date):
                         review_comments_data.append({
                             "comment_id": comment["id"],
                             "repo_name": repo_name,
                             "pr_number": comment["pull_request_url"].split("/")[-1],
-                            "user_login": comment["user"]["login"],
+                            "user_login": comment["user"]["login"] if comment["user"] is not None else "",
                             "body": comment["body"],
                             "created_at": comment["created_at"],
                         })

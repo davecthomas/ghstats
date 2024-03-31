@@ -499,35 +499,71 @@ class GhsSnowflakeStorageManager:
 
     def insert_pr_review_comments(self, df_review_comments: pd.DataFrame) -> int:
         """
-        Inserts PR review comments into a Snowflake table.
+        Inserts or updates PR review comments into the 'pr_review_comments' table in Snowflake.
+        Uses a staging table and merge operation to prevent duplicates. Clears the staging table first.
+        This function correctly handles lowercase column names by quoting them in SQL queries.
 
         Args:
             df_review_comments (pd.DataFrame): DataFrame containing PR review comments.
 
         Returns:
-            int: Number of rows inserted.
+            int: Number of rows successfully upserted.
         """
-        nrows: int = 0
+        if df_review_comments.empty:
+            # print("DataFrame is empty. No operation performed.")
+            return 0
+
+        staging_table_name = "pr_review_comments_staging"
+        target_table_name = "pr_review_comments"
+
         # Ensure the Snowflake connection is established
         conn = self.get_snowflake_connection()
 
-        # Define the target table name for PR review comments
-        table_name = "pr_review_comments"
         try:
-            # Use write_pandas to insert the DataFrame into Snowflake
-            success, nchunks, nrows, _ = write_pandas(
-                conn, df_review_comments, table_name)
+            cursor = conn.cursor()
 
+            # Step 0: Clear the staging table first
+            delete_sql = f'DELETE FROM "{staging_table_name}";'
+            cursor.execute(delete_sql)
+            conn.commit()
+            # print(f"Cleared the staging table '{staging_table_name}'.")
+
+            # Step 1: Insert DataFrame into the staging table
+            # Note: write_pandas automatically handles the DataFrame to Snowflake insertion,
+            # including the case sensitivity of column names.
+            write_pandas(conn, df_review_comments, staging_table_name)
+
+            # Step 2: Merge from staging table to target table based on 'comment_id'
+            # Make sure to quote the lowercase column names in your SQL merge statement
+            merge_sql = f"""
+            MERGE INTO "{target_table_name}" AS target
+            USING "{staging_table_name}" AS staging
+            ON target."comment_id" = staging."comment_id"
+            WHEN MATCHED THEN
+                UPDATE SET
+                target."repo_name" = staging."repo_name",
+                target."pr_number" = staging."pr_number",
+                target."user_login" = staging."user_login",
+                target."body" = staging."body",
+                target."created_at" = staging."created_at"
+            WHEN NOT MATCHED THEN
+                INSERT ("comment_id", "repo_name", "pr_number", "user_login", "body", "created_at")
+                VALUES (staging."comment_id", staging."repo_name", staging."pr_number", staging."user_login", staging."body", staging."created_at");
+            """
+
+            cursor.execute(merge_sql)
+            nrows = cursor.rowcount
+            conn.commit()
             print(
-                f"Successfully inserted {nrows} PR review comments into {table_name}.")
+                f"Successfully upserted {nrows} PR review comments into '{target_table_name}'.")
+            return nrows
         except Exception as e:
             print(
-                f"Failed to insert PR review comments into Snowflake. Error: {e}")
+                f"Failed to upsert PR review comments into Snowflake. Error: {e}")
+            return 0
         finally:
-            # Optionally, close the connection if desired
+            cursor.close()
             self.close_connection()
-            pass
-        return nrows
 
     def fetch_pr_comments_body(self, repo_names: List[str], date_since: date = None, date_until: date = None, limit: int = 250) -> List[str]:
         """

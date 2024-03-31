@@ -122,9 +122,12 @@ def generate_test_data_contributors(num_rows: int) -> pd.DataFrame:
 #     "snowflake_table_name", ""), storage_manager.get_db_env().get("snowflake_table_name_staging", ""))
 
 ghs: GhsGithub = GhsGithub()
-since_date: date = date(2023, 1, 1)
-until_date: date = date(2023, 12, 31)
-list_comments: List[str] = ghs.storage_manager.fetch_pr_comments_body(
-    ["ios-ui"], since_date, until_date, 100)
-print(list_comments)
+ghs.prep_repo_topics()
+list_repos: List[str] = ghs.dict_env.get("repo_names")
+ghs.fetch_and_store_pr_review_comments(list_repos)
+# since_date: date = date(2023, 1, 1)
+# until_date: date = date(2023, 12, 31)
+# list_comments: List[str] = ghs.storage_manager.fetch_pr_comments_body(
+#     ["ios-ui"], since_date, until_date, 100)
+# print(list_comments)
 # storage_manager.close_connection()
