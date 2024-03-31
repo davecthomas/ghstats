@@ -82,8 +82,9 @@ class GhsGithub:
         if dict_env["repo_owner"] is None:
             return None
         # These next two get initialized in prep_repo_topics
-        dict_env["dict_all_repo_topics"] = {}
-        dict_env["list_all_repo_names"] = []
+        if "all" in dict_env["repo_names"] or "all" == dict_env["topic_name"]:
+            self.prep_repo_topics()
+
         self.dict_env = dict_env
         return self.dict_env
 

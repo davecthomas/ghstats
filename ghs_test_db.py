@@ -1,8 +1,10 @@
 from __future__ import annotations
+from itertools import islice
 from typing import List
 import pandas as pd
 from datetime import date
 
+from ghs_sentiment import GhsSentimentAnalyzer
 from ghstats import GhsGithub
 
 
@@ -67,6 +69,27 @@ def generate_test_data_contributors(num_rows: int) -> pd.DataFrame:
 
 
 ghs: GhsGithub = GhsGithub()
-ghs.prep_repo_topics()
 list_repos: List[str] = ghs.dict_env.get("repo_names")
-ghs.fetch_and_store_pr_review_comments(list_repos)
+sentiment: GhsSentimentAnalyzer = GhsSentimentAnalyzer()
+list_comments: List[str] = ghs.storage_manager.fetch_pr_comments_body(
+    list_repos)
+truncated_comments = sentiment.truncate_comments(list_comments)
+# # Calculate the length of the longest comment
+# longest_comment_length = len(max(list_comments, key=len))
+# print(
+#     f"Longest comment length: {longest_comment_length} characters")
+# list_token_counts: list[int] = sentiment.count_tokens(list_comments)
+# longest_token_length: int = max(list_token_counts)
+# print(
+#     f"Token counts for the first 50 code review comments:\n{list_token_counts[:50]}. Longest token count: {longest_token_length} tokens.")
+sentiments: List[dict] = sentiment.evaluate_sentiments(truncated_comments)
+sentiment.output_to_training_csv(list_comments, sentiments)
+# print(f"Sentiment analysis results for the first 50 code review comments:")
+# i: int = 0
+# for entry in islice(sentiments, 50):
+#     print(f"{entry} {list_comments[i]}")
+#     i += 1
+scores: List[float] = sentiment.summarize_sentiments(sentiments)
+scores_rounded = [round(num, 2) for num in scores]
+print(
+    f'Summary sentiment scores for code review comments in {list_repos}:\nPositive: {scores_rounded[0]} | Negative: {scores_rounded[1]} | Total: {scores_rounded[2]} | Normalized: {scores_rounded[3]}')

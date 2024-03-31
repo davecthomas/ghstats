@@ -565,7 +565,7 @@ class GhsSnowflakeStorageManager:
             cursor.close()
             self.close_connection()
 
-    def fetch_pr_comments_body(self, repo_names: List[str], date_since: date = None, date_until: date = None, limit: int = 250) -> List[str]:
+    def fetch_pr_comments_body(self, repo_names: List[str], date_since: date = None, date_until: date = None, limit: int = -1) -> List[str]:
         """
         Fetches the body of PR comments for specified repositories within an optional date range from Snowflake.
         Can limit the number of results returned.
