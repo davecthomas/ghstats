@@ -10,8 +10,9 @@ class GhsSentimentAnalyzer:
     PERCENTAGE_SAMPLE_SIZE = 1 / 3
     MODEL_MAX_TOKEN_LENGTH = 512        # Longer comments will be truncated
     MAX_COMMENT_LENGTH = 1000           # Comments longer than this will be truncated
+    DEFAULT_SENTIMENT_GROUP_NAME = "ghstats"
 
-    def __init__(self, model_name: str = "distilbert-base-uncased-finetuned-sst-2-english"):
+    def __init__(self, sentiment_group_name="ghstats", model_name: str = "distilbert-base-uncased-finetuned-sst-2-english"):
         """
         Initializes the sentiment analyzer with a specified model.
         """
@@ -21,8 +22,9 @@ class GhsSentimentAnalyzer:
         # Initialize the tokenizer used to preprocess the text to truncate longer comments
         self.tokenizer = AutoTokenizer.from_pretrained(model_name)
         # Initialize the sentiment analysis pipeline.
-        self.analyzer = pipeline("sentiment-analysis",
-                                 model=self.model_name, device=self.device)
+        self.analyzer = pipeline(
+            "sentiment-analysis", model=self.model_name, device=self.device, truncation=True)
+        self.sentiment_group_name = sentiment_group_name
 
     def count_tokens(self, texts: List[str]) -> List[int]:
         token_counts = [len(self.tokenizer.tokenize(text)) for text in texts]
@@ -46,28 +48,18 @@ class GhsSentimentAnalyzer:
             else:
                 # For texts within the limit, append the original text
                 truncated_texts.append(text)
-            print("Truncated comments that were too long for the model: ",
-                  count_truncated_comments)
+        print("Truncated comments that were too long for the model: ",
+              count_truncated_comments)
         return truncated_texts
 
-    def evaluate_sentiments(self, texts: List[str]) -> List[dict]:
-        """
-        Evaluates the sentiments of a list of strings.
-        """
-        if not texts:
+    def evaluate_sentiments(self, list_comments: List[str]) -> List[dict]:
+        if not list_comments:
             return []
 
-        sentiments = self.analyzer(texts)
+        sentiments = self.analyzer(list_comments)
         return sentiments
 
-    def evaluate_sentiments(self, comments: List[str]) -> List[dict]:
-        if not comments:
-            return []
-
-        sentiments = self.analyzer(comments)
-        return sentiments
-
-    def output_to_training_csv(self, comments: List[str], sentiments: List[dict], filename: str = "training_dataset.csv"):
+    def output_to_training_csv(self, comments: List[str], sentiments: List[dict], filename: str = f'{DEFAULT_SENTIMENT_GROUP_NAME}_comments_sentiment_training_dataset.csv'):
 
         # Prepare data for the CSV
         data = []

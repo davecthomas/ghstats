@@ -25,3 +25,4 @@ settings.py
 # Ignore any local development or testing data
 data/
 test_data/
+training_data/

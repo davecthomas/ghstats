@@ -37,11 +37,11 @@ gdict_user_attributes: Dict[str, Dict[str, str]] = {}
 class GhsGithub:
     def __init__(self):
         self.dict_env: dict = None
+        self.storage_manager = GhsSnowflakeStorageManager()
         self.dict_env = self.get_env()
         self.since_date: date = get_date_months_ago(
             self.dict_env["months_lookback"])
         self.until_date: date = get_end_of_last_complete_month()
-        self.storage_manager = GhsSnowflakeStorageManager()
 
     def __del__(self):
         """Destructor to ensure the Snowflake connection is closed."""
@@ -81,11 +81,12 @@ class GhsGithub:
         dict_env["topic_exclude_name"] = topic_exclude_env if topic_exclude_env else None
         if dict_env["repo_owner"] is None:
             return None
+
+        self.dict_env = dict_env
         # These next two get initialized in prep_repo_topics
         if "all" in dict_env["repo_names"] or "all" == dict_env["topic_name"]:
             self.prep_repo_topics()
 
-        self.dict_env = dict_env
         return self.dict_env
 
     def check_API_rate_limit(self, response: Response) -> bool:
@@ -929,6 +930,8 @@ class GhsGithub:
         the format of this dictionary is {repo_name: [list of topics], ...}
         It then creates a list of all the repo names from the dictionary of repo topics
         """
+        if len(self.dict_env["dict_all_repo_topics"]) > 0:
+            return
         dict_repo_topics: dict = self.get_repo_topics(
             self.dict_env["repo_owner"], self.dict_env["repo_names"])
         if len(dict_repo_topics) > 0:
