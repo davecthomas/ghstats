@@ -463,39 +463,52 @@ class GhsSnowflakeStorageManager:
 
         Args:
             list_dict_repo_stats (List): List of dictionaries containing new repo stats.
-        Don't insert if the record already exists.
         Returns: count of inserted records
         """
-        count: int = 0
+        inserted_records = 0
         conn = self.get_snowflake_connection()
+        cursor = conn.cursor()
+
         check_sql = """
             SELECT COUNT(*) FROM "repo_stats"
             WHERE "repo_name" = %s AND "stats_beginning" = %s
         """
 
-        # SQL to insert the record
         insert_sql = """
             INSERT INTO "repo_stats" ("repo_name", "stats_beginning", 
             "stats_ending", "num_workdays", "num_contributors",
             "avg_pr_duration", "median_pr_duration", "num_prs", "num_commits")
             VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
         """
+
         for record in list_dict_repo_stats:
-            cursor = conn.cursor()
-            cursor.execute(
-                check_sql, (record['repo_name'], record['stats_beginning']))
-            result = cursor.fetchone()
-            if result[0] == 0:
-                cursor.execute(insert_sql, (record['repo_name'], record['stats_beginning'],
-                                            record['stats_ending'], record['num_workdays'],
-                                            record['num_contributors'], record['avg_pr_duration'],
-                                            record['median_pr_duration'], record['num_prs'], record['num_commits']))
-                conn.commit()
-                count += 1
+            try:
+                # Check if the record already exists
+                cursor.execute(
+                    check_sql, (record['repo_name'], record['stats_beginning']))
+                result = cursor.fetchone()
+            except Exception as e:
+                print(
+                    f"Error checking existence for {record['repo_name']}: {e}")
+                continue  # Skip this record and move to the next
+
+            if result[0] == 0:  # Record does not exist, proceed to insert
+                try:
+                    cursor.execute(insert_sql, (
+                        record['repo_name'], record['stats_beginning'],
+                        record['stats_ending'], record['num_workdays'],
+                        record['num_contributors'], record['avg_pr_duration'],
+                        record['median_pr_duration'], record['num_prs'], record['num_commits']))
+                    conn.commit()
+                    inserted_records += 1
+                except Exception as e:
+                    print(
+                        f"Error inserting record for {record['repo_name']}: {e}")
+
         self.close_connection()
         print(
-            f"\tStored {count} into repo_stats of {len(list_dict_repo_stats)} potential rows.")
-        return count
+            f"Successfully inserted {inserted_records} new records into repo_stats out of {len(list_dict_repo_stats)} attempted.")
+        return inserted_records
 
     def insert_pr_review_comments(self, df_review_comments: pd.DataFrame) -> int:
         """

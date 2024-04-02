@@ -985,10 +985,10 @@ class GhsGithub:
         # The first until_date is now. Step back 1 month each iteration
         # Initialize contributor_stats as an empty dictionary. Then add to it each iteration
         list_dict_contributors_stats: List[Dict[str, Any]] = []
-        # Initialize repo_stats as an empty dictionary. Then add to it each iteration.
-        list_dict_repo_stats: List[Dict[str, Any]] = []
 
         for repo in self.dict_env["repo_names"]:
+            # Initialize repo_stats as an empty dictionary. Then add to it each iteration.
+            list_dict_repo_stats: List[Dict[str, Any]] = []
             # Initialize until_date to the last day of the last complete month (which is only today if today is the last day)
             current_until_date: date = get_end_of_last_complete_month()
             since_date: date = get_date_months_ago(
@@ -997,8 +997,10 @@ class GhsGithub:
             until_date = get_end_of_last_complete_month()
             until_date_str: str = until_date.strftime('%Y-%m-%d')
             for month_delta in range(1, self.dict_env["months_lookback"] + 1):
-                # Calculate the start (since_date) of the month period
-                since_date = current_until_date - relativedelta(months=1)
+                # Calculate the start (since_date) of the month period (should be the first day of the month)
+                # current_until_date is currently the last day of the last month, so we need to step back a month, then ahead one day
+                since_date = current_until_date - \
+                    relativedelta(months=1) + timedelta(days=1)
                 print(
                     f'\nGetting stats for {self.dict_env["repo_owner"]} from {since_date.strftime("%Y-%m-%d")} to {current_until_date.strftime("%Y-%m-%d")}')
                 current_period_contributors_stats: List[Dict[str, Any]] = []
@@ -1017,10 +1019,10 @@ class GhsGithub:
             # Store this repo data for the whole sequence of months
             df: pd.DataFrame = self.prepare_for_storage(
                 list_dict_contributors_stats)
-            # if df is not None and not df.empty > 0:
-            #     print(
-            #         f"\tRetrieved stats for {len(df)} contributors. Merging them.")
-            #     self.store_contributor_stats(df)
+            if df is not None and not df.empty > 0:
+                print(
+                    f"\tRetrieved stats for {len(df)} contributors. Merging them.")
+                self.store_contributor_stats(df)
             if list_dict_repo_stats:
                 list_dict_repo_stats = self.merge_repo_stats(
                     list_dict_repo_stats, list_dict_contributors_stats)

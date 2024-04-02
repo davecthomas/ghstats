@@ -32,6 +32,7 @@ CREATE TABLE IF NOT EXISTS "contributor_stats" (
     "review_comments_ntile" INT,
     "avg_pr_duration_ntile" INT,
     "avg_ntile" INT,
+    "median_pr_duration" FLOAT,
     PRIMARY KEY ("contributor_nodeid", "repo", "stats_beginning")
 );
 
@@ -69,6 +70,7 @@ CREATE TABLE  IF NOT EXISTS "contributor_stats_staging" (
     "review_comments_ntile" INT,
     "avg_pr_duration_ntile" INT,
     "avg_ntile" INT,
+    "median_pr_duration" FLOAT,    
     PRIMARY KEY ("contributor_nodeid", "repo", "stats_beginning")
 );
 
