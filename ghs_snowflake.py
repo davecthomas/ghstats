@@ -189,95 +189,109 @@ class GhsSnowflakeStorageManager:
         if df.empty:
             print("DataFrame is empty. Skipping upsert.")
             return None
-        conn = self.get_snowflake_connection()
-        # Prereq: this assume staging table is clear!
-        self.delete_all_rows(staging_table)
+        try:
+            conn = self.get_snowflake_connection()
+            # Prereq: this assume staging table is clear!
+            self.delete_all_rows(staging_table)
 
-        # Step 1: Upload DataFrame to a staging table
-        # Avoid a warning due to a non-standard index in the dataframe
-        df.reset_index(drop=True, inplace=True)
-        write_pandas(conn, df, staging_table)
+            # Step 1: Upload DataFrame to a staging table
+            # Avoid a warning due to a non-standard index in the dataframe
+            df.reset_index(drop=True, inplace=True)
+            try:
+                # column_names_list = df.columns.tolist()
+                # print(f'\n\twrite_pandas column names: {column_names_list}')
+                success, nchunks, nrows, _ = write_pandas(
+                    conn, df, staging_table)
+                print(
+                    f"DataFrame uploaded successfully: {nrows} rows in {nchunks} chunks.")
+            except Exception as e:
+                print(f"Failed to upload DataFrame to staging table: {e}")
+                return 0  # Return 0 to indicate no rows were merged due to the upload failure
 
-        # Step 2: Merge from staging table to target table
-        merge_sql = f"""
-                INSERT INTO "{target_table}" (
-                    "repo",
-                    "contributor_nodeid",
-                    "contributor_name",
-                    "contributor_username",
-                    "curved_score",
-                    "stats_beginning",
-                    "stats_ending",
-                    "contributor_first_commit_date",
-                    "num_workdays",
-                    "commits",
-                    "prs",
-                    "review_comments",
-                    "changed_lines",
-                    "avg_pr_duration",
-                    "median_pr_review_duration",
-                    "avg_code_movement_per_pr",
-                    "commits_per_day",
-                    "changed_lines_per_day",
-                    "prs_per_day",
-                    "review_comments_per_day",
-                    "prs_diff_from_mean",
-                    "prs_ntile",
-                    "commits_ntile",
-                    "lines_of_code_ntile",
-                    "review_comments_ntile",
-                    "avg_pr_duration_ntile",
-                    "avg_ntile"
-                )
-                SELECT
-                    staging."repo",
-                    staging."contributor_nodeid",
-                    staging."contributor_name",
-                    staging."contributor_username",
-                    staging."curved_score",
-                    staging."stats_beginning",
-                    staging."stats_ending",
-                    staging."contributor_first_commit_date",
-                    staging."num_workdays",
-                    staging."commits",
-                    staging."prs",
-                    staging."review_comments",
-                    staging."changed_lines",
-                    staging."avg_pr_duration",
-                    staging."median_pr_review_duration",
-                    staging."avg_code_movement_per_pr",
-                    staging."commits_per_day",
-                    staging."changed_lines_per_day",
-                    staging."prs_per_day",
-                    staging."review_comments_per_day",
-                    staging."prs_diff_from_mean",
-                    staging."prs_ntile",
-                    staging."commits_ntile",
-                    staging."lines_of_code_ntile",
-                    staging."review_comments_ntile",
-                    staging."avg_pr_duration_ntile",
-                    staging."avg_ntile"
-                FROM
-                    "{staging_table}" AS staging
-                LEFT JOIN
-                    "{target_table}" AS existing
-                ON
-                    staging."contributor_name" = existing."contributor_name"
-                    AND staging."repo" = existing."repo"
-                    AND staging."stats_beginning" = existing."stats_beginning"
-                WHERE
-                    existing."contributor_name" IS NULL;
+            # Step 2: Merge from staging table to target table
+            merge_sql = f"""
+                    INSERT INTO "{target_table}" (
+                        "repo",
+                        "contributor_nodeid",
+                        "contributor_name",
+                        "contributor_username",
+                        "curved_score",
+                        "stats_beginning",
+                        "stats_ending",
+                        "contributor_first_commit_date",
+                        "num_workdays",
+                        "commits",
+                        "prs",
+                        "review_comments",
+                        "changed_lines",
+                        "avg_pr_duration",
+                        "avg_code_movement_per_pr",
+                        "commits_per_day",
+                        "changed_lines_per_day",
+                        "prs_per_day",
+                        "review_comments_per_day",
+                        "prs_diff_from_mean",
+                        "prs_ntile",
+                        "commits_ntile",
+                        "lines_of_code_ntile",
+                        "review_comments_ntile",
+                        "avg_pr_duration_ntile",
+                        "avg_ntile",
+                        "median_pr_review_duration"
+                    )
+                    SELECT
+                        staging."repo",
+                        staging."contributor_nodeid",
+                        staging."contributor_name",
+                        staging."contributor_username",
+                        staging."curved_score",
+                        staging."stats_beginning",
+                        staging."stats_ending",
+                        staging."contributor_first_commit_date",
+                        staging."num_workdays",
+                        staging."commits",
+                        staging."prs",
+                        staging."review_comments",
+                        staging."changed_lines",
+                        staging."avg_pr_duration",
+                        staging."avg_code_movement_per_pr",
+                        staging."commits_per_day",
+                        staging."changed_lines_per_day",
+                        staging."prs_per_day",
+                        staging."review_comments_per_day",
+                        staging."prs_diff_from_mean",
+                        staging."prs_ntile",
+                        staging."commits_ntile",
+                        staging."lines_of_code_ntile",
+                        staging."review_comments_ntile",
+                        staging."avg_pr_duration_ntile",
+                        staging."avg_ntile",
+                        staging."median_pr_review_duration"
+                    FROM
+                        "{staging_table}" AS staging
+                    LEFT JOIN
+                        "{target_table}" AS existing
+                    ON
+                        staging."contributor_name" = existing."contributor_name"
+                        AND staging."repo" = existing."repo"
+                        AND staging."stats_beginning" = existing."stats_beginning"
+                    WHERE
+                        existing."contributor_name" IS NULL;
 
 
-        """
+            """
 
-        cursor = conn.cursor()
-        cursor.execute(merge_sql)
-        conn.commit()
-        rows_merged: int = cursor.rowcount
-        print(
-            f"\tStored {rows_merged} into {target_table} of {len(df)} potential rows.")
-        conn.close()
+            cursor = conn.cursor()
+            cursor.execute(merge_sql)
+            conn.commit()
+            rows_merged: int = cursor.rowcount
+            print(
+                f"\tStored {rows_merged} into {target_table} of {len(df)} potential rows.")
+        except snowflake.connector.Error as e:
+            print(f"An error occurred storing contributor stats: {e}")
+            rows_merged = 0  # Set rows_merged to 0 in case of any error
+        finally:
+            self.close_connection()
         return rows_merged
 
     def store_list_dict(self, list_dict_test: List[Dict[str, any]], table_name: str):
