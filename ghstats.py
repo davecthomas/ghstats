@@ -1020,8 +1020,8 @@ class GhsGithub:
             df: pd.DataFrame = self.prepare_for_storage(
                 list_dict_contributors_stats)
             if df is not None and not df.empty > 0:
-                print(
-                    f"\tRetrieved stats for {len(df)} contributors. Merging them.")
+                # print(
+                #     f"\tRetrieved stats for {len(df)} contributors. Merging them.")
                 self.store_contributor_stats(df)
             if list_dict_repo_stats:
                 list_dict_repo_stats = self.merge_repo_stats(
