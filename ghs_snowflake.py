@@ -592,9 +592,12 @@ class GhsSnowflakeStorageManager:
             cursor.close()
             self.close_connection()
 
-    def fetch_pr_comments_body(self, repo_names: List[str], date_since: date = None, date_until: date = None, limit: int = -1) -> List[str]:
+    from typing import List, Dict
+    from datetime import date
+
+    def fetch_pr_comments_body(self, repo_names: List[str], date_since: date = None, date_until: date = None, limit: int = -1) -> List[Dict[int, str]]:
         """
-        Fetches the body of PR comments for specified repositories within an optional date range from Snowflake.
+        Fetches the comment_id and body of PR comments for specified repositories within an optional date range from Snowflake.
         Can limit the number of results returned.
 
         Args:
@@ -604,7 +607,7 @@ class GhsSnowflakeStorageManager:
             limit (int, optional): Maximum number of PR comment bodies to fetch. Defaults to 250. Use -1 for no limit.
 
         Returns:
-            List[str]: A list containing the body of each PR comment.
+            List[Dict[int, str]]: A list of dictionaries with comment_id as the key and body as the value.
         """
         if not repo_names:
             return []
@@ -615,11 +618,11 @@ class GhsSnowflakeStorageManager:
         placeholders = ', '.join(['%s' for _ in repo_names])
 
         query = f"""
-            SELECT "body" FROM "pr_review_comments"
+            SELECT "comment_id", "body" FROM "pr_review_comments"
             WHERE "repo_name" IN ({placeholders})
         """
 
-        query_conditions = repo_names
+        query_conditions = repo_names.copy()
 
         if date_since:
             query += " AND \"created_at\" >= %s"
@@ -635,10 +638,61 @@ class GhsSnowflakeStorageManager:
         try:
             cursor.execute(query, query_conditions)
             records = cursor.fetchall()
-            pr_comments_body = [record[0] for record in records]
+            pr_comments = [{record[0]: record[1]} for record in records]
 
         finally:
             cursor.close()
             self.close_connection()
 
-        return pr_comments_body
+        return pr_comments
+
+    # def fetch_pr_comments_body(self, repo_names: List[str], date_since: date = None, date_until: date = None, limit: int = -1) -> List[str]:
+    #     """
+    #     Fetches the body of PR comments for specified repositories within an optional date range from Snowflake.
+    #     Can limit the number of results returned.
+
+    #     Args:
+    #         repo_names (List[str]): Names of the repositories.
+    #         date_since (date, optional): Start date for filtering comments. Defaults to None.
+    #         date_until (date, optional): End date for filtering comments. Defaults to None.
+    #         limit (int, optional): Maximum number of PR comment bodies to fetch. Defaults to 250. Use -1 for no limit.
+
+    #     Returns:
+    #         List[str]: A list containing the body of each PR comment.
+    #     """
+    #     if not repo_names:
+    #         return []
+
+    #     conn = self.get_snowflake_connection()
+    #     cursor = conn.cursor()
+
+    #     placeholders = ', '.join(['%s' for _ in repo_names])
+
+    #     query = f"""
+    #         SELECT "body" FROM "pr_review_comments"
+    #         WHERE "repo_name" IN ({placeholders})
+    #     """
+
+    #     query_conditions = repo_names
+
+    #     if date_since:
+    #         query += " AND \"created_at\" >= %s"
+    #         query_conditions.append(date_since.strftime('%Y-%m-%d'))
+    #     if date_until:
+    #         query += " AND \"created_at\" <= %s"
+    #         query_conditions.append(date_until.strftime('%Y-%m-%d'))
+
+    #     # Adding limit clause to the SQL query if limit is not -1
+    #     if limit != -1:
+    #         query += f" LIMIT {limit}"
+
+    #     try:
+    #         cursor.execute(query, query_conditions)
+    #         records = cursor.fetchall()
+    #         pr_comments_body = [record[0] for record in records]
+
+    #     finally:
+    #         cursor.close()
+    #         self.close_connection()
+
+    #     return pr_comments_body

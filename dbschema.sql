@@ -130,6 +130,17 @@ CREATE TABLE IF NOT EXISTS "pr_review_comments_staging" (
     "created_at" TIMESTAMP_NTZ
 );
 
+CREATE TABLE IF NOT EXISTS "pr_review_comments_training" (
+    "comment_id" BIGINT PRIMARY KEY,
+    "repo_name" VARCHAR(256),
+    "pr_number" VARCHAR(64),
+    "user_login" VARCHAR(256),
+    "body" TEXT,
+    "created_at" TIMESTAMP_NTZ,
+    "label" VARCHAR(50) -- this is our category column
+);
+
+
 
 -- SQL here for convenience to backup the contributor_stats table
 -- BEGIN TRANSACTION;
