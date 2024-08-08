@@ -8,7 +8,10 @@ import sys
 import pandas as pd
 import numpy as np
 import time
+from dotenv import load_dotenv
 import requests
+from requests.exceptions import Timeout, RequestException
+from urllib3.exceptions import ProtocolError
 from scipy.stats import norm
 from dateutil.relativedelta import relativedelta
 from requests.models import Response
@@ -40,7 +43,7 @@ class GhsGithub:
         self.storage_manager = GhsSnowflakeStorageManager()
         self.dict_env = self.get_env()
         self.since_date: date = get_date_months_ago(
-            self.dict_env["months_lookback"])
+            self.dict_env.get("months_lookback", DEFAULT_MONTHS_LOOKBACK))
         self.until_date: date = get_end_of_last_complete_month()
 
     def __del__(self):
@@ -51,15 +54,20 @@ class GhsGithub:
             print(f"Error closing Snowflake connection: {e}")
 
     def get_env(self) -> dict:
+        load_dotenv()  # Load environment variables from .env file
         """
         Get env values
         Returns None if anything is missing, else returns a dict of settings
         """
-        dict_env: dict = {"repo_owner": None, "repo_names": [], "repo_names_exclude": [],
-                          "months_lookback": DEFAULT_MONTHS_LOOKBACK, "topic_name": None, "topic_exclude_name": None,
+        dict_env: dict = {"repo_owner": None, "repo_names": [],
+                          "repo_names_exclude": [],
+                          "months_lookback": DEFAULT_MONTHS_LOOKBACK,
+                          "topic_name": None,
+                          "topic_exclude_name": None,
                           "dict_all_repo_topics": {}}
         # Get the env settings
         dict_env["repo_owner"] = os.getenv("REPO_OWNER", None)
+        print(f"repo_owner: {dict_env['repo_owner']}")
         # Optional env var
         repo_names_env = os.getenv("REPO_NAMES")
         dict_env["repo_names"] = repo_names_env.split(
@@ -80,9 +88,12 @@ class GhsGithub:
         topic_exclude_env = os.getenv("TOPIC_EXCLUDE")
         dict_env["topic_exclude_name"] = topic_exclude_env if topic_exclude_env else None
         if dict_env["repo_owner"] is None:
+            print("No repo_owner in setttings.")
             return None
 
-        self.dict_env = dict_env
+        # do a deep copy of the dictionary
+        self.dict_env = dict_env.copy()
+
         # These next two get initialized in prep_repo_topics
         if "all" in dict_env["repo_names"] or "all" == dict_env["topic_name"]:
             self.prep_repo_topics()
@@ -129,12 +140,16 @@ class GhsGithub:
 
             try:
                 response = requests.get(url, headers=headers, params=params)
-            except requests.exceptions.Timeout:
+            except Timeout:
                 print("Initial request timed out.")
-                retry = True
-            except requests.exceptions.RequestException as e:
+                continue
+            except ProtocolError as e:
+                print(
+                    f"Retry request protocol error: {e}. Retrying in {retry_attempt_delay} seconds.")
+                continue
+            except RequestException as e:
                 print(f"Request for {url} exception {e}")
-                retry = True
+                continue
 
             if retry or (response is not None and response.status_code != 200):
                 if response.status_code == 422 and response.reason == "Unprocessable Entity":
@@ -161,9 +176,35 @@ class GhsGithub:
                         try:
                             response = requests.get(
                                 retry_response_url, headers=headers)
-                        except requests.exceptions.Timeout:
+                        except Timeout:
                             print(
-                                f"Retry request timed out. retrying in {retry_attempt_delay} seconds.")
+                                f"Request timed out. Retrying in {retry_attempt_delay} seconds.")
+                            retry = True
+                            continue
+                        except ProtocolError as e:
+                            print(
+                                f"Protocol error: {e}. Retrying in {retry_attempt_delay} seconds.")
+                            retry = True
+                            continue
+                        except ConnectionError as ce:
+                            print(
+                                f"Connection error: {ce}. Retrying in {retry_attempt_delay} seconds.")
+                            retry = True
+                            continue
+                        except requests.HTTPError as he:
+                            print(
+                                f"HTTP error: {he}. Retrying in {retry_attempt_delay} seconds.")
+                            retry = True
+                            continue
+                        except RequestException as e:
+                            print(
+                                f"Request exception: {e}. Retrying in {retry_attempt_delay} seconds.")
+                            retry = True
+                            continue
+                        except Exception as e:
+                            print(
+                                f"Request exception: {e}. Retrying in {retry_attempt_delay} seconds.")
+                            retry = True
                             continue
                         # Check if the retry response is 200
                         if response.status_code == 200:
@@ -986,7 +1027,12 @@ class GhsGithub:
         # Initialize contributor_stats as an empty dictionary. Then add to it each iteration
         list_dict_contributors_stats: List[Dict[str, Any]] = []
 
+        count_repos: int = 0
         for repo in self.dict_env["repo_names"]:
+            # print progress - count offset and number of repos in dictionary
+            count_repos += 1
+            print(
+                f"\nRepo #{count_repos} of {len(self.dict_env['repo_names'])}...\n")
             # Initialize repo_stats as an empty dictionary. Then add to it each iteration.
             list_dict_repo_stats: List[Dict[str, Any]] = []
             # Initialize until_date to the last day of the last complete month (which is only today if today is the last day)
@@ -1002,7 +1048,7 @@ class GhsGithub:
                 since_date = current_until_date - \
                     relativedelta(months=1) + timedelta(days=1)
                 print(
-                    f'\nGetting stats for {self.dict_env["repo_owner"]} from {since_date.strftime("%Y-%m-%d")} to {current_until_date.strftime("%Y-%m-%d")}')
+                    f'\nGetting stats for {self.dict_env["repo_owner"]}/{repo} from {since_date.strftime("%Y-%m-%d")} to {current_until_date.strftime("%Y-%m-%d")}')
                 current_period_contributors_stats: List[Dict[str, Any]] = []
                 dict_stats: Dict[str, Any] = self.get_contributors_stats(
                     self.dict_env, repo, since_date, current_until_date)

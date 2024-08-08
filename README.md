@@ -101,7 +101,7 @@ The number of code review comments a contributor provides is a simple -- and woe
 python3 -m venv venv
 source venv/bin/activate
 pip3 install -r requirements.txt
-python3 ghstats.py
+python3 ghstats_main.py
 ```
 
 # Settings - the .env file should have

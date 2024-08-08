@@ -61,21 +61,21 @@ def truncate_filename(repos):
 
 def get_date_months_ago(months_ago) -> date:
     current_date = date.today()
-    date_months_ago: date = current_date - relativedelta(months=months_ago)
-    return date_months_ago
+    date_months_ago = current_date - relativedelta(months=months_ago)
+    first_day_of_month = date(date_months_ago.year, date_months_ago.month, 1)
+    return first_day_of_month
 
 
-def sleep_until_ratelimit_reset_time(reset_epoch_time):
+def sleep_until_ratelimit_reset_time(reset_epoch_time: int):
     """
-    Sleep seconds from now to the future time passed in. 
+    Sleep seconds from now to the future time passed in.
     This is necessary when we [frequently!] overrun our Github API rate limit.
-
     """
-    # Convert the reset time from Unix epoch time to a datetime object
-    reset_time = datetime.utcfromtimestamp(reset_epoch_time)
+    # Convert the reset time from Unix epoch time to a datetime object in UTC
+    reset_time = datetime.fromtimestamp(reset_epoch_time, tz=timezone.utc)
 
-    # Get the current time
-    now = datetime.utcnow()
+    # Get the current time in UTC
+    now = datetime.now(tz=timezone.utc)
 
     # Calculate the time difference
     time_diff = reset_time - now
@@ -84,8 +84,6 @@ def sleep_until_ratelimit_reset_time(reset_epoch_time):
     if time_diff.total_seconds() < 0:
         print("\tNo sleep required. The rate limit reset time has already passed.")
     else:
-        time_diff = timedelta(seconds=int(time_diff.total_seconds()))
-        # Print the sleep time using timedelta's string representation
         print(f"\tSleeping until rate limit reset: {time_diff}")
         time.sleep(time_diff.total_seconds())
     return
