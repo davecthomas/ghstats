@@ -10,7 +10,7 @@ import numpy as np
 import time
 from dotenv import load_dotenv
 import requests
-from requests.exceptions import Timeout, RequestException
+from requests.exceptions import Timeout, RequestException, HTTPError
 from urllib3.exceptions import ProtocolError
 from scipy.stats import norm
 from dateutil.relativedelta import relativedelta
@@ -128,6 +128,7 @@ class GhsGithub:
         }
 
         retry: bool = False
+        retry_count: int = 0
         response: Response = Response()
         retry_url: str = None
         pages_list: List[Dict] = []
@@ -141,14 +142,34 @@ class GhsGithub:
             try:
                 response = requests.get(url, headers=headers, params=params)
             except Timeout:
-                print("Initial request timed out.")
+                print(
+                    f"Request to {url} with params {params} timed out on attempt {retry_count + 1}. Retrying in {exponential_backoff_retry_delays_list[retry_count]} seconds.")
+                retry = True
+                retry_count += 1
                 continue
             except ProtocolError as e:
                 print(
-                    f"Retry request protocol error: {e}. Retrying in {retry_attempt_delay} seconds.")
+                    f"Protocol error on attempt {retry_count + 1}: {e}. Retrying in {exponential_backoff_retry_delays_list[retry_count]} seconds.")
+                retry = True
+                retry_count += 1
+                continue
+            except ConnectionError as ce:
+                print(
+                    f"Connection error on attempt {retry_count + 1}: {ce}. Retrying in {exponential_backoff_retry_delays_list[retry_count]} seconds.")
+                retry = True
+                retry_count += 1
+                continue
+            except HTTPError as he:
+                print(
+                    f"HTTP error on attempt {retry_count + 1}: {he}. Retrying in {exponential_backoff_retry_delays_list[retry_count]} seconds.")
+                retry = True
+                retry_count += 1
                 continue
             except RequestException as e:
-                print(f"Request for {url} exception {e}")
+                print(
+                    f"Request exception on attempt {retry_count + 1}: {e}. Retrying in {exponential_backoff_retry_delays_list[retry_count]} seconds.")
+                retry = True
+                retry_count += 1
                 continue
 
             if retry or (response is not None and response.status_code != 200):
@@ -178,34 +199,41 @@ class GhsGithub:
                                 retry_response_url, headers=headers)
                         except Timeout:
                             print(
-                                f"Request timed out. Retrying in {retry_attempt_delay} seconds.")
+                                f"Request to {url} with params {params} timed out on attempt {retry_count + 1}. Retrying in {retry_attempt_delay} seconds.")
                             retry = True
+                            retry_count += 1
                             continue
                         except ProtocolError as e:
                             print(
-                                f"Protocol error: {e}. Retrying in {retry_attempt_delay} seconds.")
+                                f"Protocol error on attempt {retry_count + 1}: {e}. Retrying in {retry_attempt_delay} seconds.")
                             retry = True
+                            retry_count += 1
                             continue
                         except ConnectionError as ce:
                             print(
-                                f"Connection error: {ce}. Retrying in {retry_attempt_delay} seconds.")
+                                f"Connection error on attempt {retry_count + 1}: {ce}. Retrying in {retry_attempt_delay} seconds.")
                             retry = True
+                            retry_count += 1
                             continue
-                        except requests.HTTPError as he:
+                        except HTTPError as he:
                             print(
-                                f"HTTP error: {he}. Retrying in {retry_attempt_delay} seconds.")
+                                f"HTTP error on attempt {retry_count + 1}: {he}. Retrying in {retry_attempt_delay} seconds.")
                             retry = True
+                            retry_count += 1
                             continue
                         except RequestException as e:
                             print(
-                                f"Request exception: {e}. Retrying in {retry_attempt_delay} seconds.")
+                                f"Request exception on attempt {retry_count + 1}: {e}. Retrying in {retry_attempt_delay} seconds.")
                             retry = True
+                            retry_count += 1
                             continue
                         except Exception as e:
                             print(
-                                f"Request exception: {e}. Retrying in {retry_attempt_delay} seconds.")
+                                f"Unexpected exception on attempt {retry_count + 1}: {e}. Retrying in {retry_attempt_delay} seconds.")
                             retry = True
+                            retry_count += 1
                             continue
+
                         # Check if the retry response is 200
                         if response.status_code == 200:
                             break  # Exit the loop on successful response
