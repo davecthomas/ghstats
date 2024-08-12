@@ -58,12 +58,27 @@ def truncate_filename(repos):
         # filename = ''.join(c for c in filename if c.isalnum() or c in ['_', '.', ' '])
     return repos
 
+# get_first_day_months_ago gets the first day of the month, n months ago
 
-def get_date_months_ago(months_ago) -> date:
+
+def get_first_day_months_ago(months_ago) -> date:
     current_date = date.today()
     date_months_ago = current_date - relativedelta(months=months_ago)
     first_day_of_month = date(date_months_ago.year, date_months_ago.month, 1)
     return first_day_of_month
+
+
+def get_first_day_of_month(date_in_month: date) -> date:
+    return date_in_month.replace(day=1)
+
+
+def get_last_day_months_ago(months_ago) -> date:
+    current_date = date.today()
+    date_months_ago = current_date - relativedelta(months=months_ago)
+    first_day_of_month = date(date_months_ago.year, date_months_ago.month, 1)
+    last_day_of_month = first_day_of_month + \
+        relativedelta(months=1) - timedelta(days=1)
+    return last_day_of_month
 
 
 def sleep_until_ratelimit_reset_time(reset_epoch_time: int):

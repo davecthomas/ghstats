@@ -42,7 +42,7 @@ class GhsGithub:
         self.dict_env: dict = None
         self.storage_manager = GhsSnowflakeStorageManager()
         self.dict_env = self.get_env()
-        self.since_date: date = get_date_months_ago(
+        self.since_date: date = get_first_day_months_ago(
             self.dict_env.get("months_lookback", DEFAULT_MONTHS_LOOKBACK))
         self.until_date: date = get_end_of_last_complete_month()
 
@@ -62,6 +62,7 @@ class GhsGithub:
         dict_env: dict = {"repo_owner": None, "repo_names": [],
                           "repo_names_exclude": [],
                           "months_lookback": DEFAULT_MONTHS_LOOKBACK,
+                          "months_count": 1,
                           "topic_name": None,
                           "topic_exclude_name": None,
                           "dict_all_repo_topics": {}}
@@ -81,6 +82,7 @@ class GhsGithub:
             os.getenv("DEFAULT_MONTHS_LOOKBACK", 3))
         if dict_env["months_lookback"] < 1:
             dict_env["months_lookback"] = 3
+        dict_env["months_count"] = int(os.getenv("MONTHS_COUNT", 1))
         # Optional env var, which can be "all" to get all repo topics (thus all repos with topics) in the org
         topic_env = os.getenv("TOPIC")
         dict_env["topic_name"] = topic_env if topic_env else None
@@ -1015,9 +1017,7 @@ class GhsGithub:
             print(f"Missing env vars - README")
             return
 
-        since_date: date = get_date_months_ago(
-            self.dict_env["months_lookback"])
-        since_date_str: str = since_date.strftime('%Y-%m-%d')
+        since_date_str: str = self.since_date.strftime('%Y-%m-%d')
 
         # Get the topics for all the repos. Need this now because we accept "all" as a topic, below
         # We stash the dict of repo_topics in the settings for use later
@@ -1064,17 +1064,26 @@ class GhsGithub:
             # Initialize repo_stats as an empty dictionary. Then add to it each iteration.
             list_dict_repo_stats: List[Dict[str, Any]] = []
             # Initialize until_date to the last day of the last complete month (which is only today if today is the last day)
-            current_until_date: date = get_end_of_last_complete_month()
-            since_date: date = get_date_months_ago(
-                self.dict_env["months_lookback"])
-            since_date_str: str = since_date.strftime('%Y-%m-%d')
-            until_date = get_end_of_last_complete_month()
-            until_date_str: str = until_date.strftime('%Y-%m-%d')
-            for month_delta in range(1, self.dict_env["months_lookback"] + 1):
+            current_until_date: date = None
+            if self.dict_env["months_count"] == 0:
+                current_until_date = get_end_of_last_complete_month()
+            else:
+                current_until_date = get_last_day_months_ago(
+                    self.dict_env["months_lookback"])
+            # Initialize the number of months to look back
+            months_count: int = 0
+            # this allows us to selectively pull a range of months from the past and not all the months to the present
+            # Needed when we find bad data and need to patch!
+            # example: if it's August and you want to just get data for June (not July), set months_lookback=2 and months_count=1
+            if self.dict_env["months_count"] > 0:
+                months_count = self.dict_env["months_count"]
+            else:
+                months_count = self.dict_env["months_lookback"]
+            for month_delta in range(1, months_count + 1):
                 # Calculate the start (since_date) of the month period (should be the first day of the month)
                 # current_until_date is currently the last day of the last month, so we need to step back a month, then ahead one day
-                since_date = current_until_date - \
-                    relativedelta(months=1) + timedelta(days=1)
+                since_date = get_first_day_of_month(current_until_date)
+
                 print(
                     f'\nGetting stats for {self.dict_env["repo_owner"]}/{repo} from {since_date.strftime("%Y-%m-%d")} to {current_until_date.strftime("%Y-%m-%d")}')
                 current_period_contributors_stats: List[Dict[str, Any]] = []
