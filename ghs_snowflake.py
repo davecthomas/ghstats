@@ -37,9 +37,13 @@ class GhsSnowflakeStorageManager:
                 "snowflake_warehouse": os.getenv("SNOWFLAKE_WAREHOUSE"),
                 "snowflake_db": os.getenv("SNOWFLAKE_DB"),
                 "snowflake_schema": os.getenv("SNOWFLAKE_SCHEMA"),
-                "snowflake_table_name_staging": os.getenv("SNOWFLAKE_TABLE_NAME_STAGING"),
+                "snowflake_table_name_staging": os.getenv(
+                    "SNOWFLAKE_TABLE_NAME_STAGING"
+                ),
                 "snowflake_table_name": os.getenv("SNOWFLAKE_TABLE_NAME"),
-                "snowflake_table_name_contributors": os.getenv("SNOWFLAKE_TABLE_NAME_CONTRIBUTORS")
+                "snowflake_table_name_contributors": os.getenv(
+                    "SNOWFLAKE_TABLE_NAME_CONTRIBUTORS"
+                ),
             }
         return self.dict_db_env
 
@@ -56,16 +60,18 @@ class GhsSnowflakeStorageManager:
                         warehouse=dict_db_env["snowflake_warehouse"],
                         database=dict_db_env["snowflake_db"],
                         schema=dict_db_env["snowflake_schema"],
-                        timeout=30  # Set a timeout for connection
+                        timeout=30,  # Set a timeout for connection
                     )
                     break
                 except snowflake.connector.errors.OperationalError as e:
                     print(
-                        f"Connection attempt {attempt} failed: {e}. Retrying in {delay} seconds...")
+                        f"Connection attempt {attempt} failed: {e}. Retrying in {delay} seconds..."
+                    )
                     time.sleep(delay)
             if self.conn is None or self.conn.is_closed():
                 raise Exception(
-                    "Could not connect to Snowflake after multiple attempts.")
+                    "Could not connect to Snowflake after multiple attempts."
+                )
         return self.conn
 
     # Other methods remain the same...
@@ -81,7 +87,9 @@ class GhsSnowflakeStorageManager:
             cursor.execute('SELECT "repo_name", "topic" FROM "repo_topics"')
             existing_records = cursor.fetchall()
             existing_repo_topics = [
-                {"repo_name": repo_name, "topic": topic} for repo_name, topic in existing_records]
+                {"repo_name": repo_name, "topic": topic}
+                for repo_name, topic in existing_records
+            ]
         except Exception as e:
             print(f"Error fetching existing repo topics: {e}")
             existing_repo_topics = []
@@ -90,10 +98,15 @@ class GhsSnowflakeStorageManager:
             self.close_connection()
         return existing_repo_topics
 
-    def repo_topic_dict_to_dataframe(self, source_dict: Dict[str, List[str]]) -> pd.DataFrame:
+    def repo_topic_dict_to_dataframe(
+        self, source_dict: Dict[str, List[str]]
+    ) -> pd.DataFrame:
         """Converts a dictionary to a pandas DataFrame."""
-        data = [{"repo_name": repo_name, "repo_topic": topic}
-                for repo_name, topics in source_dict.items() for topic in topics]
+        data = [
+            {"repo_name": repo_name, "repo_topic": topic}
+            for repo_name, topics in source_dict.items()
+            for topic in topics
+        ]
         return pd.DataFrame(data)
 
     def store_repo_topics(self, dict_repo_topics: dict) -> int:
@@ -116,16 +129,15 @@ class GhsSnowflakeStorageManager:
         rows_merged: int = 0
         for _, row in df.iterrows():
             try:
-                cursor.execute(
-                    check_query, (row['repo_name'], row['repo_topic']))
+                cursor.execute(check_query, (row["repo_name"], row["repo_topic"]))
                 result = cursor.fetchone()
                 if result[0] == 0:
-                    cursor.execute(
-                        insert_query, (row['repo_name'], row['repo_topic']))
+                    cursor.execute(insert_query, (row["repo_name"], row["repo_topic"]))
                     rows_merged += 1
             except Exception as e:
                 print(
-                    f"Error inserting repo topic {row['repo_name'], row['repo_topic']}: {e}")
+                    f"Error inserting repo topic {row['repo_name'], row['repo_topic']}: {e}"
+                )
         conn.commit()
         cursor.close()
         self.close_connection()
@@ -137,8 +149,9 @@ class GhsSnowflakeStorageManager:
         conn = self.get_snowflake_connection()
         try:
             cursor = conn.cursor().execute(query)
-            df = pd.DataFrame(cursor.fetchall(), columns=[
-                              col[0] for col in cursor.description])
+            df = pd.DataFrame(
+                cursor.fetchall(), columns=[col[0] for col in cursor.description]
+            )
         except Exception as e:
             print(f"Error executing select query: {e}")
             df = pd.DataFrame()
@@ -161,7 +174,8 @@ class GhsSnowflakeStorageManager:
         try:
             success, nchunks, nrows, _ = write_pandas(conn, df, table_name)
             print(
-                f"Data stored in Snowflake table {table_name}: {nrows} rows in {nchunks} chunks.")
+                f"Data stored in Snowflake table {table_name}: {nrows} rows in {nchunks} chunks."
+            )
         except Exception as e:
             print(f"Error storing DataFrame in Snowflake: {e}")
         finally:
@@ -173,12 +187,13 @@ class GhsSnowflakeStorageManager:
         try:
             conn.cursor().execute(f'DELETE FROM "{staging_table}";')
         except Exception as e:
-            print(
-                f"Error deleting rows from staging table {staging_table}: {e}")
+            print(f"Error deleting rows from staging table {staging_table}: {e}")
         finally:
             self.close_connection()
 
-    def upsert_contributor_stats_dataframe(self, df: pd.DataFrame, target_table: str, staging_table: str) -> int:
+    def upsert_contributor_stats_dataframe(
+        self, df: pd.DataFrame, target_table: str, staging_table: str
+    ) -> int:
         """
         Upserts data from a DataFrame into the target table using a staging table.
         :param df: DataFrame to upsert.
@@ -196,10 +211,8 @@ class GhsSnowflakeStorageManager:
             self.conn = self.get_snowflake_connection()
 
             df.reset_index(drop=True, inplace=True)
-            success, nchunks, nrows, _ = write_pandas(
-                self.conn, df, staging_table)
-            print(
-                f"DataFrame uploaded successfully: {nrows} rows in {nchunks} chunks.")
+            success, nchunks, nrows, _ = write_pandas(self.conn, df, staging_table)
+            print(f"DataFrame uploaded successfully: {nrows} rows in {nchunks} chunks.")
             merge_sql = f"""
                 INSERT INTO "{target_table}" (
                     "repo", "contributor_nodeid", "contributor_name", "contributor_username", 
@@ -238,7 +251,8 @@ class GhsSnowflakeStorageManager:
             self.conn.commit()
             rows_merged: int = cursor.rowcount
             print(
-                f"Stored {rows_merged} into {target_table} of {len(df)} potential rows.")
+                f"Stored {rows_merged} into {target_table} of {len(df)} potential rows."
+            )
         except snowflake.connector.Error as e:
             print(f"An error occurred storing contributor stats: {e}")
             rows_merged = 0
@@ -257,10 +271,17 @@ class GhsSnowflakeStorageManager:
         cursor = conn.cursor()
         try:
             cursor.execute(
-                'SELECT "contributor_nodeid", "contributor_name", "contributor_username" FROM "contributors"')
+                'SELECT "contributor_nodeid", "contributor_name", "contributor_username" FROM "contributors"'
+            )
             existing_records = cursor.fetchall()
-            existing_contributors = [{"contributor_nodeid": nodeid, "contributor_name": name,
-                                      "contributor_username": username} for nodeid, name, username in existing_records]
+            existing_contributors = [
+                {
+                    "contributor_nodeid": nodeid,
+                    "contributor_name": name,
+                    "contributor_username": username,
+                }
+                for nodeid, name, username in existing_records
+            ]
         except Exception as e:
             print(f"Error fetching existing contributors: {e}")
             existing_contributors = []
@@ -272,18 +293,26 @@ class GhsSnowflakeStorageManager:
     def insert_new_contributors(self, df: pd.DataFrame) -> int:
         """Inserts new records into the 'contributors' table from a DataFrame, excluding existing records."""
         existing_contributors = self.fetch_existing_contributors()
-        existing_nodeids = {contributor['contributor_nodeid']
-                            for contributor in existing_contributors}
+        existing_nodeids = {
+            contributor["contributor_nodeid"] for contributor in existing_contributors
+        }
         conn = self.get_snowflake_connection()
         cursor = conn.cursor()
         count = 0
         try:
             for _, row in df.iterrows():
-                if row['contributor_nodeid'] not in existing_nodeids:
-                    cursor.execute("""
+                if row["contributor_nodeid"] not in existing_nodeids:
+                    cursor.execute(
+                        """
                         INSERT INTO "contributors" ("contributor_nodeid", "contributor_name", "contributor_username")
                         VALUES (%s, %s, %s)
-                    """, (row['contributor_nodeid'], row['contributor_name'], row['contributor_username']))
+                    """,
+                        (
+                            row["contributor_nodeid"],
+                            row["contributor_name"],
+                            row["contributor_username"],
+                        ),
+                    )
                     count += 1
             conn.commit()
         except Exception as e:
@@ -298,13 +327,17 @@ class GhsSnowflakeStorageManager:
         """Upserts contributors into the 'contributors' table."""
         existing_contributors_list = self.fetch_existing_contributors()
         if not existing_contributors_list:
-            self.store_df(df, self.get_db_env().get(
-                "snowflake_table_name_contributors", ""))
+            self.store_df(
+                df, self.get_db_env().get("snowflake_table_name_contributors", "")
+            )
             return len(df)
         else:
             existing_contributors_df = pd.DataFrame(existing_contributors_list)
-            new_records_df = df[~df['contributor_nodeid'].isin(
-                existing_contributors_df['contributor_nodeid'])]
+            new_records_df = df[
+                ~df["contributor_nodeid"].isin(
+                    existing_contributors_df["contributor_nodeid"]
+                )
+            ]
             if not new_records_df.empty:
                 return self.insert_new_contributors(new_records_df)
         return 0
@@ -329,14 +362,16 @@ class GhsSnowflakeStorageManager:
     def insert_new_repo_topics(self, new_topics_df: pd.DataFrame) -> int:
         """Inserts new repo topics into Snowflake, avoiding duplicates."""
         existing_topics = self.get_existing_repo_topics()
-        new_records = [(row['repo_name'], row['repo_topic']) for _, row in new_topics_df.iterrows(
-        ) if (row['repo_name'], row['repo_topic']) not in existing_topics]
+        new_records = [
+            (row["repo_name"], row["repo_topic"])
+            for _, row in new_topics_df.iterrows()
+            if (row["repo_name"], row["repo_topic"]) not in existing_topics
+        ]
         if new_records:
-            df_insert = pd.DataFrame(new_records, columns=[
-                                     'repo_name', 'repo_topic'])
+            df_insert = pd.DataFrame(new_records, columns=["repo_name", "repo_topic"])
             conn = self.get_snowflake_connection()
             try:
-                write_pandas(conn, df_insert, 'repo_topics')
+                write_pandas(conn, df_insert, "repo_topics")
                 return len(df_insert)
             except Exception as e:
                 print(f"Error inserting new repo topics: {e}")
@@ -360,25 +395,47 @@ class GhsSnowflakeStorageManager:
         """
         inserted_records = 0
         for record in list_dict_repo_stats:
+            if [
+                "repo_name",
+                "stats_beginning",
+                "stats_ending",
+                "num_workdays",
+                "num_contributors",
+                "avg_pr_duration",
+                "median_pr_duration",
+                "num_prs",
+                "num_commits",
+            ] != list(record.keys()):
+                print(f"Error: record {record} does not contain the expected keys.")
+                continue
             try:
                 cursor.execute(
-                    check_sql, (record['repo_name'], record['stats_beginning']))
+                    check_sql, (record["repo_name"], record["stats_beginning"])
+                )
                 result = cursor.fetchone()
                 if result[0] == 0:
-                    cursor.execute(insert_sql, (
-                        record['repo_name'], record['stats_beginning'], record['stats_ending'],
-                        record['num_workdays'], record['num_contributors'],
-                        record['avg_pr_duration'], record['median_pr_duration'],
-                        record['num_prs'], record['num_commits']
-                    ))
+                    cursor.execute(
+                        insert_sql,
+                        (
+                            record["repo_name"],
+                            record["stats_beginning"],
+                            record["stats_ending"],
+                            record["num_workdays"],
+                            record["num_contributors"],
+                            record["avg_pr_duration"],
+                            record["median_pr_duration"],
+                            record["num_prs"],
+                            record["num_commits"],
+                        ),
+                    )
                     conn.commit()
                     inserted_records += 1
             except Exception as e:
-                print(
-                    f"Error inserting repo stats for {record['repo_name']}: {e}")
+                print(f"Error inserting repo stats for {record['repo_name']}: {e}")
         self.close_connection()
         print(
-            f"Successfully inserted {inserted_records} new records into repo_stats out of {len(list_dict_repo_stats)} attempted.")
+            f"Successfully inserted {inserted_records} new records into repo_stats out of {len(list_dict_repo_stats)} attempted."
+        )
         return inserted_records
 
     def insert_pr_review_comments(self, df_review_comments: pd.DataFrame) -> int:
@@ -412,23 +469,29 @@ class GhsSnowflakeStorageManager:
             nrows = cursor.rowcount
             conn.commit()
             print(
-                f"Successfully upserted {nrows} PR review comments into '{target_table_name}'.")
+                f"Successfully upserted {nrows} PR review comments into '{target_table_name}'."
+            )
             return nrows
         except Exception as e:
-            print(
-                f"Failed to upsert PR review comments into Snowflake. Error: {e}")
+            print(f"Failed to upsert PR review comments into Snowflake. Error: {e}")
             return 0
         finally:
             cursor.close()
             self.close_connection()
 
-    def fetch_pr_comments_body(self, repo_names: List[str], date_since: date = None, date_until: date = None, limit: int = -1) -> List[Dict[int, str]]:
+    def fetch_pr_comments_body(
+        self,
+        repo_names: List[str],
+        date_since: date = None,
+        date_until: date = None,
+        limit: int = -1,
+    ) -> List[Dict[int, str]]:
         """Fetches the comment_id and body of PR comments for specified repositories within an optional date range from Snowflake."""
         if not repo_names:
             return []
         conn = self.get_snowflake_connection()
         cursor = conn.cursor()
-        placeholders = ', '.join(['%s' for _ in repo_names])
+        placeholders = ", ".join(["%s" for _ in repo_names])
         query = f"""
             SELECT "comment_id", "body" FROM "pr_review_comments"
             WHERE "repo_name" IN ({placeholders})
@@ -436,12 +499,12 @@ class GhsSnowflakeStorageManager:
         query_conditions = repo_names.copy()
         if date_since:
             query += ' AND "created_at" >= %s'
-            query_conditions.append(date_since.strftime('%Y-%m-%d'))
+            query_conditions.append(date_since.strftime("%Y-%m-%d"))
         if date_until:
             query += ' AND "created_at" <= %s'
-            query_conditions.append(date_until.strftime('%Y-%m-%d'))
+            query_conditions.append(date_until.strftime("%Y-%m-%d"))
         if limit != -1:
-            query += f' LIMIT {limit}'
+            query += f" LIMIT {limit}"
         try:
             cursor.execute(query, query_conditions)
             records = cursor.fetchall()
