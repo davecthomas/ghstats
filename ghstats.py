@@ -1,7 +1,7 @@
 from __future__ import annotations
 from typing import Dict, Any, List, Tuple, Optional
 import json
-from datetime import datetime
+from datetime import datetime, timezone
 from datetime import date
 import os
 import sys
@@ -41,9 +41,12 @@ class GhsGithub:
         self.dict_env: dict = None
         self.storage_manager = GhsSnowflakeStorageManager()
         self.dict_env = self.get_env()
-        self.since_date: date = get_first_day_months_ago(
+        months_lookback = (
             self.dict_env.get("months_lookback", DEFAULT_MONTHS_LOOKBACK)
+            if self.dict_env is not None
+            else DEFAULT_MONTHS_LOOKBACK
         )
+        self.since_date: date = get_first_day_months_ago(months_lookback)
         self.until_date: date = get_end_of_last_complete_month()
 
     def __del__(self):
@@ -663,9 +666,9 @@ class GhsGithub:
         1. "contributor_stats" - a list of dictionaries of stats for each contributor
         2. "repo_stats" - a dictionary of stats for the repo as a whole
         """
-        dict_return: Dict[str, any] = {
+        dict_return: Dict[str, Any] = {
             "contributor_stats": [],
-            "repo_stats": Dict[str, any],
+            "repo_stats": {},
         }
 
         # This is the list of dictionaries of our stats, which this function populates
@@ -847,7 +850,9 @@ class GhsGithub:
                         weekly_stat_utc: int = weekly_stat.get("w", None)
                         weekly_date: date = (
                             weekly_stat_utc
-                            and datetime.utcfromtimestamp(weekly_stat_utc).date()
+                            and datetime.fromtimestamp(
+                                weekly_stat_utc, tz=timezone.utc
+                            ).date()
                         )
 
                         if (
@@ -885,10 +890,11 @@ class GhsGithub:
                                 else 0.0
                             )
                             # add this avg duration to a dict with list of durations for this user, to be averaged later.
-                            if contributor_username not in dict_avg_durations:
+                            # Key by contributor_name (display name) to match the lookup below.
+                            if contributor_name not in dict_avg_durations:
                                 dict_avg_durations[contributor_name] = [avg_duration]
                             else:
-                                dict_avg_durations[contributor_username].append(
+                                dict_avg_durations[contributor_name].append(
                                     avg_duration
                                 )
 
@@ -938,7 +944,7 @@ class GhsGithub:
             print(
                 f"\tNo contributors found for {repo_name} between {since_date} and {until_date}."
             )
-            return None
+            return dict_return
 
         # Across all contributions for all repos, calculate avg duration of PRs.
         # Generate a new dictionary with contributor_name to average duration
@@ -1170,7 +1176,7 @@ class GhsGithub:
 
         # Add num_prs and num_commits to each repo stats
         for repo_stat in list_dict_repo_stats:
-            if type(repo_stat) == "Dict":
+            if isinstance(repo_stat, dict):
                 repo_name = repo_stat.get("repo_name", "")
                 if repo_name in dict_repo_stats_aggregated:
                     repo_stat.update(dict_repo_stats_aggregated[repo_name])
@@ -1279,7 +1285,7 @@ class GhsGithub:
                 current_period_contributors_stats: List[Dict[str, Any]] = []
                 dict_stats: Dict[str, Any] = self.get_contributors_stats(
                     self.dict_env, repo, since_date, current_until_date
-                )
+                ) or {}
                 current_period_contributors_stats = dict_stats.get(
                     "contributor_stats", []
                 )
@@ -1289,7 +1295,8 @@ class GhsGithub:
                     list_dict_contributors_stats.extend(
                         current_period_contributors_stats
                     )
-                    list_dict_repo_stats.append(current_period_repo_stats)
+                    if current_period_repo_stats:
+                        list_dict_repo_stats.append(current_period_repo_stats)
                 # Update until_date for the next iteration to step back another month
                 current_until_date = since_date
 
